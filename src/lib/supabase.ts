@@ -386,6 +386,45 @@ export async function upsertProfile(profile: UserProfile & { id?: string }): Pro
   }, false);
 }
 
+export async function fetchFamilyByUserId(userId: string): Promise<FamilyGroup | null> {
+  return safeQuery(async () => {
+    if (!supabase || !userId) return null;
+    const { data: membership, error: membershipError } = await supabase
+      .from('family_members')
+      .select('family_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (membershipError || !membership || typeof membership !== 'object' || !('family_id' in membership)) {
+      return null;
+    }
+
+    const familyId = (membership as { family_id: string }).family_id;
+    if (!familyId) return null;
+
+    const { data, error } = await supabase
+      .from('families')
+      .select('*')
+      .eq('id', familyId)
+      .maybeSingle();
+    if (error || !data) return null;
+
+    const fam = data as DBFamily;
+    const members = await fetchFamilyMembers(fam.id);
+    const rewards = await fetchFamilyRewards(fam.id);
+
+    return {
+      id: fam.id,
+      name: typeof fam.name === 'string' ? fam.name || `عائلة ${fam.code}` : `عائلة ${fam.code}`,
+      code: typeof fam.code === 'string' ? fam.code : 'LOCAL',
+      currency: typeof fam.currency === 'string' ? fam.currency || 'ج.م' : 'ج.م',
+      members,
+      treasury: typeof fam.treasury_balance === 'number' ? fam.treasury_balance : 0,
+      rewards,
+    };
+  }, null);
+}
+
 export async function fetchFamilyByCode(
   code: string,
   fallbackMembers?: FamilyMember[]
@@ -501,18 +540,21 @@ export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
       return true;
     }
     if (Array.isArray(fg.members) && fg.members.length) {
-      const rows = fg.members.map<DBFamilyMember>((m) => ({
-        id: m.id || generateUUID(),
-        family_id: famRow.id,
-        user_id: m.id || generateUUID(),
-        display_name: m.name || 'عضو',
-        is_head: !!m.isHead,
-        points: typeof m.points === 'number' ? m.points : 0,
-        prayers_today: typeof m.prayersToday === 'number' ? m.prayersToday : 0,
-        total_prayers: typeof m.totalPrayers === 'number' ? m.totalPrayers : 0,
-        pages_today: typeof m.pagesToday === 'number' ? m.pagesToday : 0,
-        total_pages: typeof m.totalPages === 'number' ? m.totalPages : 0,
-      }));
+      const rows = fg.members.map<DBFamilyMember>((m) => {
+        const userId = m.userId || m.id || generateUUID();
+        return {
+          id: m.id || generateUUID(),
+          family_id: famRow.id,
+          user_id: userId,
+          display_name: m.name || 'عضو',
+          is_head: !!m.isHead,
+          points: typeof m.points === 'number' ? m.points : 0,
+          prayers_today: typeof m.prayersToday === 'number' ? m.prayersToday : 0,
+          total_prayers: typeof m.totalPrayers === 'number' ? m.totalPrayers : 0,
+          pages_today: typeof m.pagesToday === 'number' ? m.pagesToday : 0,
+          total_pages: typeof m.totalPages === 'number' ? m.totalPages : 0,
+        };
+      });
       try {
         const { error: e2 } = await supabase.from('family_members').upsert(rows, { onConflict: 'id' });
         if (e2) return true;
@@ -536,10 +578,28 @@ export async function updateFamilyTreasury(familyId: string, balance: number): P
 
 export async function upsertMember(member: FamilyMember, familyId: string): Promise<boolean> {
   return safeQuery(async () => {
+    const userId = member.userId || member.id;
+    if (!userId) return false;
+
+    let rowId = member.id || generateUUID();
+    try {
+      const { data: existing, error: existingError } = await supabase!
+        .from('family_members')
+        .select('id')
+        .eq('family_id', familyId)
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (!existingError && existing && typeof existing === 'object' && typeof existing.id === 'string') {
+        rowId = existing.id;
+      }
+    } catch {
+      // ignore membership lookup errors, fall back to provided row id
+    }
+
     const row: DBFamilyMember = {
-      id: member.id,
+      id: rowId,
       family_id: familyId,
-      user_id: member.id,
+      user_id: userId,
       display_name: member.name,
       is_head: member.isHead,
       points: member.points,

@@ -61,6 +61,7 @@ export interface Reward {
 
 export interface FamilyMember {
   id: string;
+  userId?: string;
   name: string;
   points: number;
   isHead: boolean;

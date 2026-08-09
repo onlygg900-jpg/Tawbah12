@@ -26,6 +26,7 @@ import {
   isSupabaseAvailable,
   insertFamily,
   fetchFamilyByCode,
+  fetchFamilyByUserId,
   updateFamilyTreasury,
   upsertMember,
   insertReward,
@@ -143,6 +144,10 @@ function safeFamilyGroup(value: unknown): FamilyGroup | null {
     members: safeArray<FamilyMember>(obj.members, []),
     rewards: safeArray<Reward>(obj.rewards, []),
   };
+}
+
+function isCurrentFamilyMember(member: FamilyMember, userId: string, displayName: string): boolean {
+  return member.userId === userId || member.id === userId || member.name === displayName;
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -286,6 +291,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
             } catch {
               // ignore daily progress fetch failures; local state remains
             }
+            try {
+              const remoteFamily = await fetchFamilyByUserId(sessionUser.id);
+              if (remoteFamily) {
+                setFamily(remoteFamily);
+              }
+            } catch {
+              // ignore family lookup failures
+            }
           }
         } catch {
           // ignore session fetch failures; local state remains
@@ -303,7 +316,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!isCloudSync) return () => {};
-    const unsubscribe = subscribeAuthChanges((user) => {
+    const unsubscribe = subscribeAuthChanges(async (user) => {
       if (user) {
         setUserIdState((old) => old || user.id);
         setProfile((p) => ({
@@ -316,6 +329,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }));
         setAuthenticated(true);
         setAuthLoading(false);
+        try {
+          const remoteFamily = await fetchFamilyByUserId(user.id);
+          if (remoteFamily) {
+            setFamily(remoteFamily);
+          }
+        } catch {
+          // ignore family lookup failures
+        }
       }
     });
     return unsubscribe;
@@ -482,7 +503,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setFamily((f) => {
             if (!f) return f;
             const updatedMembers = f.members.map((m) => {
-              if (m.name !== profile.displayName && m.id !== userId) return m;
+              if (!isCurrentFamilyMember(m, userId, profile.displayName)) return m;
               const delta = becameDone ? 1 : -1;
               return {
                 ...m,
@@ -494,7 +515,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             const next = { ...f, members: updatedMembers };
             if (isCloudSync) {
               for (const mm of updatedMembers) {
-                if (mm.name === profile.displayName || mm.id === userId) {
+                if (isCurrentFamilyMember(mm, userId, profile.displayName)) {
                   void upsertMember(mm, f.id);
                 }
               }
@@ -527,14 +548,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setFamily((f) => {
       if (!f) return f;
       const updatedMembers = f.members.map((m) =>
-        m.name === profile.displayName || m.id === userId
+        isCurrentFamilyMember(m, userId, profile.displayName)
           ? { ...m, pagesToday: m.pagesToday + pages, totalPages: m.totalPages + pages, points: m.points + pages * 2 }
           : m
       );
       const next = { ...f, members: updatedMembers };
       if (isCloudSync) {
         for (const mm of updatedMembers) {
-          if (mm.name === profile.displayName || mm.id === userId) {
+          if (isCurrentFamilyMember(mm, userId, profile.displayName)) {
             void upsertMember(mm, f.id);
           }
         }
@@ -612,6 +633,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const headMember = {
         ...makeMember(profile.displayName, true),
         id: userId,
+        userId,
       };
       const fg: FamilyGroup = {
         id: generateUUID(),
@@ -657,16 +679,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
             const currentMember: FamilyMember = {
               ...makeMember(profile.displayName, false),
               id: userId,
+              userId,
               prayersToday: 0,
               pagesToday: stats.pagesReadToday,
               totalPrayers: stats.totalPrayersOnTime + stats.totalPrayersLate,
               totalPages: stats.totalPagesRead,
             };
-            const alreadyExists = safeRemoteMembers.some((m) => m.id === userId || m.name === profile.displayName);
+            const alreadyExists = safeRemoteMembers.some((m) => m.userId === userId || m.id === userId || m.name === profile.displayName);
             const nextMembers = alreadyExists
               ? safeRemoteMembers.map((m) =>
-                  m.id === userId || m.name === profile.displayName
-                    ? { ...m, pagesToday: currentMember.pagesToday, totalPrayers: currentMember.totalPrayers, totalPages: currentMember.totalPages }
+                  m.userId === userId || m.id === userId || m.name === profile.displayName
+                    ? { ...m, pagesToday: currentMember.pagesToday, totalPrayers: currentMember.totalPrayers, totalPages: currentMember.totalPages, userId }
                     : m
                 )
               : [...safeRemoteMembers, currentMember];
@@ -680,7 +703,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               if (!alreadyExists) {
                 void upsertMember(currentMember, remote.id);
               } else {
-                const matching = nextMembers.find((m) => m.id === userId || m.name === profile.displayName);
+                const matching = nextMembers.find((m) => m.userId === userId || m.id === userId || m.name === profile.displayName);
                 if (matching) void upsertMember(matching, remote.id);
               }
             } catch {
