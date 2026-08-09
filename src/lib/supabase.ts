@@ -37,7 +37,7 @@ export interface DBProfile {
   id: string;
   display_name: string;
   email: string;
-  avatar_color: string;
+  avatar_color?: string;
   avatar_url?: string;
   created_at?: string;
 }
@@ -68,11 +68,7 @@ export interface DBDailyProgress {
   id: string;
   user_id: string;
   date: string;
-  prayers_on_time: number;
-  prayers_late: number;
-  prayers_missed: number;
   pages_read: number;
-  charity: number;
 }
 
 export interface DBReward {
@@ -174,7 +170,6 @@ export async function signUpWithEmail(
       id: uid,
       display_name: displayName,
       email: email,
-      avatar_color: baseResult.avatarColor,
     };
     try {
       await supabase.from('profiles').upsert(profileRow);
@@ -229,7 +224,6 @@ export async function signInWithEmail(
       id: uid,
       display_name: existing?.displayName || baseResult.displayName,
       email: email,
-      avatar_color: existing?.avatarColor || baseResult.avatarColor,
     };
     try {
       await supabase.from('profiles').upsert(profileRow);
@@ -240,7 +234,7 @@ export async function signInWithEmail(
       ...baseResult,
       id: uid,
       displayName: profileRow.display_name,
-      avatarColor: profileRow.avatar_color,
+      avatarColor: existing?.avatarColor || baseResult.avatarColor,
       success: true,
     };
   } catch (e) {
@@ -262,19 +256,7 @@ export async function signInAsGuest(displayName: string, seedColor = '#d97706'):
     method: 'guest',
   };
   await upsertLocalProfile(res);
-  if (available && supabase) {
-    try {
-      const row: DBProfile = {
-        id: res.id,
-        display_name: res.displayName,
-        email: res.email || 'guest@local.tawbah',
-        avatar_color: res.avatarColor,
-      };
-      await supabase.from('profiles').upsert(row);
-    } catch {
-      // ignore cloud upsert failure for guests
-    }
-  }
+  // Guest accounts are local-only; do not sync invalid guest IDs to Supabase.
   return res;
 }
 
@@ -310,6 +292,10 @@ function emailIdFromEmail(email: string): string {
   } catch {
     return `u_${generateUUID()}`;
   }
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 async function upsertLocalProfile(profile: AuthResult): Promise<void> {
@@ -369,10 +355,11 @@ export async function upsertProfile(profile: UserProfile & { id?: string }): Pro
     const row: DBProfile = {
       id,
       display_name: profile.displayName,
-      email: profile.email,
-      avatar_color: profile.avatarColor,
+      email: profile.email || '',
     };
-    const { error } = await supabase!.from('profiles').upsert(row);
+    const { error } = await supabase!
+      .from('profiles')
+      .upsert(row, { onConflict: 'id' });
     return !error;
   }, false);
 }
@@ -584,17 +571,25 @@ export async function upsertDailyProgress(progress: {
   stats: SoloStats;
 }): Promise<boolean> {
   return safeQuery(async () => {
+    if (!progress.userId || !progress.date || !isUuid(progress.userId)) return false;
+
+    const { data: existing, error: fetchError } = await supabase!
+      .from('daily_progress')
+      .select('id')
+      .eq('user_id', progress.userId)
+      .eq('date', progress.date)
+      .maybeSingle();
+    if (fetchError) return false;
+
     const row: DBDailyProgress = {
-      id: `${progress.userId}-${progress.date}`,
+      id: existing?.id || generateUUID(),
       user_id: progress.userId,
       date: progress.date,
-      prayers_on_time: progress.stats.totalPrayersOnTime,
-      prayers_late: progress.stats.totalPrayersLate,
-      prayers_missed: progress.stats.totalPrayersMissed,
       pages_read: progress.stats.totalPagesRead,
-      charity: progress.stats.personalCharity,
     };
-    const { error } = await supabase!.from('daily_progress').upsert(row);
+    const { error } = await supabase!
+      .from('daily_progress')
+      .upsert(row, { onConflict: 'id' });
     return !error;
   }, false);
 }
@@ -640,11 +635,9 @@ export function subscribeAuthChanges(callback: (user: AuthStateUser | null) => v
         id: u.id,
         display_name: displayName,
         email: u.email || '',
-        avatar_color: '#064e3b',
-        avatar_url: avatarUrl || undefined,
       };
       try {
-        await supabase!.from('profiles').upsert(profile);
+        await supabase!.from('profiles').upsert(profile, { onConflict: 'id' });
       } catch {
         // ignore profile upsert failures
       }
