@@ -44,6 +44,7 @@ import {
   subscribeAuthChanges,
   fetchCurrentSession,
   fetchDailyProgress,
+  handleOAuthRedirect,
 } from '@/lib/supabase';
 import { generateUUID } from '@/utils/uuid';
 
@@ -252,6 +253,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     if (isCloudSync) {
       void (async () => {
+        try {
+          await handleOAuthRedirect();
+        } catch {
+          // ignore redirect parsing errors
+        }
         try {
           const sessionUser = await fetchCurrentSession();
           if (sessionUser) {

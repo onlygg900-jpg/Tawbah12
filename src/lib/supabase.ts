@@ -33,6 +33,28 @@ export async function safeQuery<T>(fn: () => Promise<T>, fallback: T): Promise<T
   }
 }
 
+function cleanOAuthHash(): void {
+  if (typeof window === 'undefined') return;
+  if (!window.location.hash) return;
+  const { pathname, search } = window.location;
+  window.history.replaceState(null, '', pathname + search);
+}
+
+export async function handleOAuthRedirect(): Promise<boolean> {
+  if (!available || !supabase || typeof window === 'undefined') return false;
+  if (!window.location.hash.includes('access_token') && !window.location.hash.includes('refresh_token')) {
+    return false;
+  }
+  try {
+    const { data } = await supabase.auth.getSession();
+    cleanOAuthHash();
+    return !!data?.session;
+  } catch {
+    cleanOAuthHash();
+    return false;
+  }
+}
+
 export interface DBProfile {
   id: string;
   display_name: string;
@@ -473,7 +495,7 @@ export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
       treasury_balance: typeof fg.treasury === 'number' ? fg.treasury : 0,
     };
     try {
-      const { error: e1 } = await supabase.from('families').upsert(famRow);
+      const { error: e1 } = await supabase.from('families').upsert(famRow, { onConflict: 'id' });
       if (e1) return true;
     } catch {
       return true;
@@ -492,7 +514,7 @@ export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
         total_pages: typeof m.totalPages === 'number' ? m.totalPages : 0,
       }));
       try {
-        const { error: e2 } = await supabase.from('family_members').upsert(rows, { onConflict: 'id,family_id', ignoreDuplicates: false });
+        const { error: e2 } = await supabase.from('family_members').upsert(rows, { onConflict: 'id' });
         if (e2) return true;
       } catch {
         return true;
@@ -526,7 +548,7 @@ export async function upsertMember(member: FamilyMember, familyId: string): Prom
       pages_today: member.pagesToday,
       total_pages: member.totalPages,
     };
-    const { error } = await supabase!.from('family_members').upsert(row);
+    const { error } = await supabase!.from('family_members').upsert(row, { onConflict: 'id' });
     return !error;
   }, false);
 }
@@ -534,7 +556,7 @@ export async function upsertMember(member: FamilyMember, familyId: string): Prom
 export async function insertReward(reward: Reward, familyId: string): Promise<boolean> {
   return safeQuery(async () => {
     const row = rewardToDb(reward, familyId);
-    const { error } = await supabase!.from('rewards').insert({ ...row, id: reward.id });
+    const { error } = await supabase!.from('rewards').upsert({ ...row, id: reward.id }, { onConflict: 'id' });
     return !error;
   }, false);
 }
@@ -599,10 +621,11 @@ export async function signInWithGoogle(): Promise<{ success: boolean; error?: st
     return { success: false, error: 'Supabase غير متوفر' };
   }
   try {
+    const redirectTo = `${window.location.origin}${window.location.pathname}`;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: window.location.origin,
+        redirectTo,
       },
     });
     if (error) {
@@ -627,6 +650,9 @@ export function subscribeAuthChanges(callback: (user: AuthStateUser | null) => v
     return () => {};
   }
   const { data } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    if (typeof window !== 'undefined' && (window.location.hash.includes('access_token') || window.location.hash.includes('refresh_token'))) {
+      cleanOAuthHash();
+    }
     if (session?.user) {
       const u = session.user;
       const displayName = (u.user_metadata?.full_name as string) || (u.user_metadata?.name as string) || u.email?.split('@')[0] || 'مستخدم توبة';
@@ -691,20 +717,21 @@ export async function fetchDailyProgress(userId: string, date: string): Promise<
     try {
       const { data, error } = await supabase!
         .from('daily_progress')
-        .select('*')
+        .select('pages_read')
         .eq('user_id', userId)
         .eq('date', date)
         .maybeSingle();
       if (error || !data || typeof data !== 'object') return null;
-      const p = data as DBDailyProgress;
+      const p = data as { pages_read?: number };
+      const pages = typeof p.pages_read === 'number' ? p.pages_read : 0;
       return {
         streak: 0,
-        totalPrayersOnTime: typeof p.prayers_on_time === 'number' ? p.prayers_on_time : 0,
-        totalPrayersLate: typeof p.prayers_late === 'number' ? p.prayers_late : 0,
-        totalPrayersMissed: typeof p.prayers_missed === 'number' ? p.prayers_missed : 0,
-        personalCharity: typeof p.charity === 'number' ? p.charity : 0,
-        pagesReadToday: 0,
-        totalPagesRead: typeof p.pages_read === 'number' ? p.pages_read : 0,
+        totalPrayersOnTime: 0,
+        totalPrayersLate: 0,
+        totalPrayersMissed: 0,
+        personalCharity: 0,
+        pagesReadToday: pages,
+        totalPagesRead: pages,
         badges: [],
         lastCompletedDate: null,
       };

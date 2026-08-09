@@ -150,14 +150,16 @@ export default function QuranView() {
   }, [surahs, query]);
 
   const openPage = (page: number, khatmaId?: string) => {
-    setPageToRead(page);
+    const safePage = Number.isFinite(page) && !Number.isNaN(page) ? page : 1;
+    const normalizedPage = Math.max(1, Math.min(604, safePage));
+    setPageToRead(normalizedPage);
     setActiveKhatmaId(khatmaId ?? null);
     setSubView('reader');
   };
 
   const openSurah = (s: Surah) => {
     const pages = String(s.pages).split('-').map(Number);
-    const firstPage = pages[0];
+    const firstPage = Number.isFinite(pages[0]) && !Number.isNaN(pages[0]) ? pages[0] : 1;
     openPage(firstPage);
   };
 
@@ -320,11 +322,12 @@ function QuranReader({ page, onBack, onPageChange, activeKhatmaId, surahs }: Qur
   }, [page]);
 
   const changePage = (newPage: number) => {
-    if (newPage < 1 || newPage > 604 || newPage === page) return;
-    const delta = newPage - page;
-    onPageChange(newPage);
+    const safePage = Number.isFinite(newPage) && !Number.isNaN(newPage) ? newPage : page;
+    if (safePage < 1 || safePage > 604 || safePage === page) return;
+    const delta = safePage - page;
+    onPageChange(safePage);
     if (activeKhatmaId) {
-      updateKhatmaPage(activeKhatmaId, newPage);
+      updateKhatmaPage(activeKhatmaId, safePage);
       if (delta > 0) {
         addQuranPages(delta);
       }

@@ -740,14 +740,18 @@ function FamilyMode() {
     setRefreshing(true);
     try {
       const { fetchFamilyMembers: ffMembers, fetchFamilyRewards: ffRewards } = await import('@/lib/supabase');
-      const newMembers = await ffMembers(family.id);
-      const newRewards = await ffRewards(family.id);
-      if (Array.isArray(newMembers) && newMembers.length) {
-        (family as any).members = newMembers;
-      }
-      if (Array.isArray(newRewards)) {
-        (family as any).rewards = newRewards;
-      }
+      const [newMembers, newRewards] = await Promise.all([
+        ffMembers(family.id).catch(() => []),
+        ffRewards(family.id).catch(() => []),
+      ]);
+      setFamily((cur) => {
+        if (!cur) return cur;
+        return {
+          ...cur,
+          members: Array.isArray(newMembers) && newMembers.length ? newMembers : cur.members,
+          rewards: Array.isArray(newRewards) ? newRewards : cur.rewards,
+        };
+      });
     } catch {
       // ignore refresh errors
     } finally {
