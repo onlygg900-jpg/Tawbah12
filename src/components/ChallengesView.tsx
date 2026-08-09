@@ -176,12 +176,12 @@ function SoloMode() {
         }
       >
         <div className="flex items-center gap-4 mb-4">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gold/15 text-3xl">🐷</div>
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gold/15 text-3xl"> </div>
           <div className="flex-1">
             <p className="text-3xl font-extrabold text-emerald dark:text-gold-light">
               {stats.personalCharity.toLocaleString('ar-EG')}
             </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">ريال سعودي (تتبع شخصي)</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">ج.م (تتبع شخصي)</p>
           </div>
         </div>
 
