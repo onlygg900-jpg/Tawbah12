@@ -1,0 +1,20 @@
+{
+  "name": "توبة - Tawbah",
+  "short_name": "توبة",
+  "description": "تطبيق إسلامي شامل: مواقيت الصلاة، القبلة، القرآن الكريم، التحديات العائلية والأذكار",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#064e3b",
+  "theme_color": "#064e3b",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

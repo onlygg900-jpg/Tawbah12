@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply font-sans antialiased bg-slate-50 text-slate-900 dark:bg-emerald-deep dark:text-slate-100;
+    overscroll-behavior-y: none;
+  }
+  * {
+    -webkit-overflow-scrolling: touch;
+  }
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-emerald/30 rounded-full;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl bg-white dark:bg-emerald-soft/40 shadow-sm border border-slate-200/70 dark:border-emerald-soft/30;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-emerald px-4 py-2.5 text-white font-semibold transition active:scale-95 hover:bg-emerald-soft disabled:opacity-50 disabled:active:scale-100;
+  }
+  .btn-gold {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-gold px-4 py-2.5 text-white font-semibold transition active:scale-95 hover:bg-gold-light disabled:opacity-50;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 dark:bg-emerald-soft/30 px-4 py-2.5 font-semibold text-slate-700 dark:text-slate-200 transition active:scale-95 hover:bg-slate-200 dark:hover:bg-emerald-soft/50;
+  }
+  .input {
+    @apply w-full rounded-xl border border-slate-200 dark:border-emerald-soft/40 bg-white dark:bg-emerald-deep/60 px-4 py-2.5 text-slate-900 dark:text-slate-100 outline-none transition focus:border-emerald focus:ring-2 focus:ring-emerald/30;
+  }
+  .tab-active {
+    @apply text-emerald dark:text-gold-light;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold;
+  }
+}
+
+@layer utilities {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  .quran-text {
+    font-family: 'Amiri', 'Cairo', serif;
+    line-height: 2.2;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
