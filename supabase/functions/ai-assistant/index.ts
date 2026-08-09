@@ -29,6 +29,7 @@ interface GeminiResponse {
 }
 
 Deno.serve(async (req: Request) => {
+  // معالجة طلبات الـ OPTIONS الخاصة بالـ CORS قبل أي شيء
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
