@@ -448,56 +448,30 @@ export async function fetchFamilyByUserId(userId: string): Promise<FamilyGroup |
   }, null);
 }
 
-export async function fetchFamilyByCode(
-  code: string,
-  fallbackMembers?: FamilyMember[]
-): Promise<FamilyGroup> {
-  const localFallback: FamilyGroup = {
-    id: `local-${code.toUpperCase()}`,
-    name: `عائلة ${code.toUpperCase()}`,
-    code: code.toUpperCase(),
-    currency: 'ج.م',
-    members: Array.isArray(fallbackMembers) && fallbackMembers.length ? fallbackMembers : [],
-    treasury: 0,
-    rewards: [],
-  };
-  return safeQuery(async () => {
-    if (!supabase) return localFallback;
-    try {
-      const { data, error } = await supabase
-        .from('families')
-        .select('*')
-        .eq('code', code.toUpperCase())
-        .maybeSingle();
-      if (error || !data) return localFallback;
-      const fam = data as DBFamily;
-      let members: FamilyMember[] = [];
-      let rewards: Reward[] = [];
-      try {
-        const rawMembers = await fetchFamilyMembers(fam.id);
-        members = Array.isArray(rawMembers) ? rawMembers : [];
-      } catch {
-        members = Array.isArray(fallbackMembers) ? fallbackMembers : [];
-      }
-      try {
-        const rawRewards = await fetchFamilyRewards(fam.id);
-        rewards = Array.isArray(rawRewards) ? rawRewards : [];
-      } catch {
-        rewards = [];
-      }
-      return {
-        id: fam.id,
-        name: typeof fam.name === 'string' ? fam.name || localFallback.name : localFallback.name,
-        code: typeof fam.code === 'string' ? fam.code || localFallback.code : localFallback.code,
-        currency: typeof fam.currency === 'string' ? fam.currency || 'ج.م' : 'ج.م',
-        members,
-        treasury: typeof fam.treasury_balance === 'number' ? fam.treasury_balance : 0,
-        rewards,
-      };
-    } catch {
-      return localFallback;
-    }
-  }, localFallback);
+export async function fetchFamilyByCode(code: string): Promise<FamilyGroup | null> {
+  if (!available || !supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from('families')
+      .select('*')
+      .eq('code', code.toUpperCase())
+      .maybeSingle();
+    if (error || !data) return null;
+    const fam = data as DBFamily;
+    const members = await fetchFamilyMembers(fam.id);
+    const rewards = await fetchFamilyRewards(fam.id);
+    return {
+      id: fam.id,
+      name: typeof fam.name === 'string' ? fam.name || `عائلة ${fam.code}` : `عائلة ${fam.code}`,
+      code: typeof fam.code === 'string' ? fam.code : 'LOCAL',
+      currency: typeof fam.currency === 'string' ? fam.currency || 'ج.م' : 'ج.م',
+      members,
+      treasury: typeof fam.treasury_balance === 'number' ? fam.treasury_balance : 0,
+      rewards,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchFamilyMembers(familyId: string): Promise<FamilyMember[]> {
@@ -559,8 +533,8 @@ export async function fetchFamilyRewards(familyId: string): Promise<Reward[]> {
 }
 
 export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
-  return safeQuery(async () => {
-    if (!supabase) return true;
+  if (!available || !supabase) return false;
+  try {
     const famRow: Partial<DBFamily> & { id: string; created_by?: string } = {
       id: fg.id || `fam-${Date.now().toString(36)}`,
       name: fg.name || 'عائلة توبة',
@@ -572,32 +546,29 @@ export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
       const sessionUser = await fetchCurrentSession();
       if (sessionUser) famRow.created_by = sessionUser.id;
     } catch {
-      // ignore
+      // ignore session fetch
     }
-    try {
-      const { error: e1 } = await supabase.from('families').upsert(famRow, { onConflict: 'id' });
-      if (e1) return true;
-    } catch {
-      return true;
+    const { error: e1 } = await supabase.from('families').upsert(famRow, { onConflict: 'id' });
+    if (e1) {
+      console.error('insertFamily error:', e1.message);
+      return false;
     }
     if (Array.isArray(fg.members) && fg.members.length) {
       for (const m of fg.members) {
-        const userId = m.userId || m.id;
-        if (!userId) continue;
+        const mUserId = m.userId || m.id;
+        if (!mUserId || !isUuid(mUserId)) continue;
         try {
           await supabase.from('profiles').upsert({
-            id: userId,
+            id: mUserId,
             display_name: m.name || 'عضو',
-            email: m.userId ? `${userId}@guest.tawbah.local` : undefined,
           }, { onConflict: 'id' });
         } catch {
           // ignore profile upsert
         }
         try {
-          const { error: e2 } = await supabase.from('family_members').upsert({
-            id: m.id || undefined,
+          await supabase.from('family_members').upsert({
             family_id: famRow.id,
-            user_id: userId,
+            user_id: mUserId,
             display_name: m.name || 'عضو',
             is_head: !!m.isHead,
             points: typeof m.points === 'number' ? m.points : 0,
@@ -606,27 +577,26 @@ export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
             pages_today: typeof m.pagesToday === 'number' ? m.pagesToday : 0,
             total_pages: typeof m.totalPages === 'number' ? m.totalPages : 0,
           }, { onConflict: 'user_id' });
-          if (e2) {
-            // try insert without id to let DB generate one
-            await supabase.from('family_members').upsert({
-              family_id: famRow.id,
-              user_id: userId,
-              display_name: m.name || 'عضو',
-              is_head: !!m.isHead,
-              points: typeof m.points === 'number' ? m.points : 0,
-              prayers_today: typeof m.prayersToday === 'number' ? m.prayersToday : 0,
-              total_prayers: typeof m.totalPrayers === 'number' ? m.totalPrayers : 0,
-              pages_today: typeof m.pagesToday === 'number' ? m.pagesToday : 0,
-              total_pages: typeof m.totalPages === 'number' ? m.totalPages : 0,
-            }, { onConflict: 'user_id' });
-          }
         } catch {
           // ignore member upsert
         }
       }
     }
     return true;
-  }, true);
+  } catch (err) {
+    console.error('insertFamily exception:', err);
+    return false;
+  }
+}
+
+export async function removeFamilyMember(userId: string): Promise<boolean> {
+  if (!available || !supabase) return false;
+  try {
+    const { error } = await supabase.from('family_members').delete().eq('user_id', userId);
+    return !error;
+  } catch {
+    return false;
+  }
 }
 
 export async function updateFamilyTreasury(familyId: string, balance: number): Promise<boolean> {
@@ -711,33 +681,16 @@ export async function upsertDailyProgress(progress: {
   return safeQuery(async () => {
     if (!progress.userId || !progress.date || !isUuid(progress.userId)) return false;
 
-    const { data: existing, error: fetchError } = await supabase!
-      .from('daily_progress')
-      .select('id')
-      .eq('user_id', progress.userId)
-      .eq('date', progress.date)
-      .maybeSingle();
-    if (fetchError) return false;
-
-    const row: DBDailyProgress = {
-      id: existing?.id || generateUUID(),
+    const row: Omit<DBDailyProgress, 'id'> = {
       user_id: progress.userId,
       date: progress.date,
       pages_read: progress.stats.totalPagesRead,
       prayers_completed: progress.stats.totalPrayersOnTime + progress.stats.totalPrayersLate,
     };
 
-    if (existing && typeof existing === 'object' && typeof existing.id === 'string') {
-      const { error } = await supabase!
-        .from('daily_progress')
-        .update(row)
-        .eq('id', existing.id);
-      return !error;
-    }
-
     const { error } = await supabase!
       .from('daily_progress')
-      .insert(row);
+      .upsert(row, { onConflict: 'user_id,date' });
     return !error;
   }, false);
 }

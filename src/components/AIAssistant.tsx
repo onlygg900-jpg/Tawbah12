@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { MessageCircle, X, Send, Sparkles } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -12,8 +13,6 @@ const SUGGESTIONS = [
   'ما هي أذكار الصباح؟',
   'كيف أبدأ ختمة القرآن؟',
 ];
-
-const FUNCTION_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-assistant`;
 
 export default function AIAssistant() {
   const [open, setOpen] = useState(false);
@@ -38,19 +37,17 @@ export default function AIAssistant() {
     setLoading(true);
 
     try {
-      const res = await fetch(FUNCTION_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const { data, error } = await supabase.functions.invoke('ai-assistant', {
         body: JSON.stringify({
           messages: [...messages, userMsg].map((m) => ({ role: m.role, content: m.content })),
         }),
       });
 
-      if (!res.ok) throw new Error('network');
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (error) throw new Error(String(error));
+      if (data?.error) throw new Error(data.error);
 
-      setMessages((m) => [...m, { role: 'assistant', content: data.reply }]);
+      const reply = typeof data?.reply === 'string' ? data.reply : 'عذراً، لم أتمكن من توليد رد.';
+      setMessages((m) => [...m, { role: 'assistant', content: reply }]);
     } catch {
       setMessages((m) => [
         ...m,

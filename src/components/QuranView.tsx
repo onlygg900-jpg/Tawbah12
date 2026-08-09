@@ -26,8 +26,9 @@ import { fetchSurahs, fetchAyahs, fetchAllAyahs, fetchTafsir, RECITERS, ayahAudi
 import type { Ayah } from '@/services/quranService';
 import type { Surah, Reciter, QuranKhatma } from '@/types';
 import { SectionCard, ErrorBanner, LoadingSpinner, Modal, EmptyState } from '@/components/ui';
+import MushafPageView from '@/components/MushafPageView';
 
-type SubView = 'list' | 'reader' | 'khatma';
+type SubView = 'list' | 'reader' | 'khatma' | 'mushaf';
 
 export default function QuranView() {
   const [subView, setSubView] = useState<SubView>('list');
@@ -162,12 +163,13 @@ export default function QuranView() {
     );
   }, [surahs, query]);
 
+  const [mushafPage, setMushafPage] = useState(1);
+
   const openPage = (page: number, khatmaId?: string) => {
     const normalizedPage = normalizePage(page);
-    const matchedSurah = findSurahByPage(normalizedPage);
-    setSelectedSurahId(matchedSurah?.id ?? null);
+    setMushafPage(normalizedPage);
     setActiveKhatmaId(khatmaId ?? null);
-    setSubView('reader');
+    setSubView('mushaf');
   };
 
   const openSurah = (s: Surah) => {
@@ -263,6 +265,16 @@ export default function QuranView() {
       )}
 
       {subView === 'khatma' && <KhatmaTracker onOpenSurah={openSurah} onOpenPage={openPage} surahs={surahs} />}
+
+      {subView === 'mushaf' && (
+        <MushafPageView
+          page={mushafPage}
+          surahs={surahs}
+          khatmaId={activeKhatmaId}
+          onBack={() => setSubView(activeKhatmaId ? 'khatma' : 'list')}
+          onPageChange={(p) => setMushafPage(p)}
+        />
+      )}
     </div>
   );
 }
