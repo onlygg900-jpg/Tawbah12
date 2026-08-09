@@ -22,7 +22,7 @@ import {
   SkipForward,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
-import { fetchSurahs, fetchAyahs, fetchAllAyahs, fetchAyahsByPage, fetchTafsir, RECITERS, ayahAudioUrl, ayahAudioFallbackUrl } from '@/services/quranService';
+import { fetchSurahs, fetchAyahs, fetchAllAyahs, fetchTafsir, RECITERS, ayahAudioUrl, ayahAudioFallbackUrl } from '@/services/quranService';
 import type { Ayah } from '@/services/quranService';
 import type { Surah, Reciter, QuranKhatma } from '@/types';
 import { SectionCard, ErrorBanner, LoadingSpinner, Modal, EmptyState } from '@/components/ui';
@@ -35,7 +35,7 @@ export default function QuranView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [pageToRead, setPageToRead] = useState<number | null>(null);
+  const [selectedSurahId, setSelectedSurahId] = useState<number | null>(null);
   const [activeKhatmaId, setActiveKhatmaId] = useState<string | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
@@ -164,15 +164,16 @@ export default function QuranView() {
 
   const openPage = (page: number, khatmaId?: string) => {
     const normalizedPage = normalizePage(page);
-    setPageToRead(normalizedPage);
+    const matchedSurah = findSurahByPage(normalizedPage);
+    setSelectedSurahId(matchedSurah?.id ?? null);
     setActiveKhatmaId(khatmaId ?? null);
     setSubView('reader');
   };
 
   const openSurah = (s: Surah) => {
-    const pages = String(s.pages).split('-').map(Number);
-    const firstPage = pages[0];
-    openPage(firstPage);
+    setSelectedSurahId(s.id);
+    setActiveKhatmaId(null);
+    setSubView('reader');
   };
 
   return (
@@ -252,12 +253,11 @@ export default function QuranView() {
         </div>
       )}
 
-      {subView === 'reader' && pageToRead !== null && (
+      {subView === 'reader' && selectedSurahId !== null && (
         <QuranReader
-          page={pageToRead}
+          surahId={selectedSurahId}
           onBack={() => setSubView('list')}
-          onPageChange={setPageToRead}
-          activeKhatmaId={activeKhatmaId}
+          onSurahChange={setSelectedSurahId}
           surahs={surahs}
         />
       )}
@@ -268,21 +268,14 @@ export default function QuranView() {
 }
 
 interface QuranReaderProps {
-  page: number;
+  surahId: number;
   onBack: () => void;
-  onPageChange: (page: number) => void;
-  activeKhatmaId: string | null;
+  onSurahChange: (surahId: number) => void;
   surahs: Surah[];
 }
 
-function QuranReader({ page, onBack, onPageChange, activeKhatmaId, surahs }: QuranReaderProps) {
-  const { updateKhatmaPage, addQuranPages } = useApp();
+function QuranReader({ surahId, onBack, onSurahChange, surahs }: QuranReaderProps) {
   const [ayahs, setAyahs] = useState<Ayah[]>([]);
-  const normalizePage = (value: number | string | null | undefined) => {
-    const parsed = typeof value === 'number' ? value : Number(value);
-    if (!Number.isFinite(parsed) || Number.isNaN(parsed)) return 1;
-    return Math.max(1, Math.min(604, Math.floor(parsed)));
-  };
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reciter, setReciter] = useState<Reciter>(RECITERS[0]);
@@ -303,18 +296,19 @@ function QuranReader({ page, onBack, onPageChange, activeKhatmaId, surahs }: Qur
   const fallbackRef = useRef(false);
   const scrollTimer = useRef<number | undefined>(undefined);
 
-  const pageSurah = useMemo(() => {
-    return surahs.find((s) => {
-      const pages = String(s.pages).split('-').map(Number);
-      return page >= pages[0] && page <= (pages[1] || pages[0]);
-    });
-  }, [page, surahs]);
+  const currentSurah = useMemo(() => {
+    return surahs.find((s) => s.id === surahId);
+  }, [surahId, surahs]);
+
+  const currentSurahIndex = useMemo(() => {
+    return surahs.findIndex((s) => s.id === surahId);
+  }, [surahId, surahs]);
 
   const loadAyahs = async () => {
     setLoading(true);
     setError(null);
     try {
-      const list = await fetchAyahsByPage(page);
+      const list = await fetchAyahs(surahId);
       if (list.length === 0) {
         throw new Error('لم يتم العثور على آيات لهذه الصفحة.');
       }
@@ -336,18 +330,13 @@ function QuranReader({ page, onBack, onPageChange, activeKhatmaId, surahs }: Qur
     setTafsir((t) => ({ ...t, open: false }));
     stopAudio();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
+  }, [surahId]);
 
-  const changePage = (newPage: number) => {
-    const safePage = normalizePage(newPage);
-    if (safePage < 1 || safePage > 604 || safePage === page) return;
-    const delta = safePage - page;
-    onPageChange(safePage);
-    if (activeKhatmaId) {
-      updateKhatmaPage(activeKhatmaId, safePage);
-      if (delta > 0) {
-        addQuranPages(delta);
-      }
+  const goToSurah = (offset: number) => {
+    const targetIndex = currentSurahIndex + offset;
+    const targetSurah = surahs[targetIndex];
+    if (targetSurah) {
+      onSurahChange(targetSurah.id);
     }
   };
 
@@ -484,11 +473,31 @@ function QuranReader({ page, onBack, onPageChange, activeKhatmaId, surahs }: Qur
         <button onClick={onBack} className="btn-ghost px-3 py-2 text-sm">
           <ChevronRight size={16} /> العودة
         </button>
-        <div className="text-center">
-          <p className="text-xl font-bold text-emerald dark:text-gold-light font-quran">صفحة {page}</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            {pageSurah ? `سورة ${pageSurah.arabicName}` : 'صفحة المصحف'}
-          </p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => goToSurah(-1)}
+            disabled={currentSurahIndex <= 0}
+            className="btn-ghost p-2 disabled:opacity-40"
+            aria-label="السورة السابقة"
+          >
+            <ChevronRight size={16} />
+          </button>
+          <div className="text-center">
+            <p className="text-xl font-bold text-emerald dark:text-gold-light font-quran">
+              {currentSurah ? `سورة ${currentSurah.arabicName}` : 'القرآن الكريم'}
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {currentSurah ? `${currentSurah.englishName} · ${currentSurah.versesCount} آية` : 'جارٍ التحميل...'}
+            </p>
+          </div>
+          <button
+            onClick={() => goToSurah(1)}
+            disabled={currentSurahIndex < 0 || currentSurahIndex >= surahs.length - 1}
+            className="btn-ghost p-2 disabled:opacity-40"
+            aria-label="السورة التالية"
+          >
+            <ChevronLeft size={16} />
+          </button>
         </div>
         <select
           value={reciter.id}
