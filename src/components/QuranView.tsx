@@ -92,9 +92,16 @@ export default function QuranView() {
     setSearching(true);
     try {
       const pageNumber = Number(q);
-      if (Number.isFinite(pageNumber) && !Number.isNaN(pageNumber) && pageNumber >= 1 && pageNumber <= 604) {
-        openPage(pageNumber);
-        return;
+      if (Number.isFinite(pageNumber) && !Number.isNaN(pageNumber)) {
+        const foundSurah = surahs.find((s) => s.id === pageNumber);
+        if (foundSurah) {
+          openSurah(foundSurah);
+          return;
+        }
+        if (pageNumber >= 1 && pageNumber <= 604) {
+          setSearchError('يمكنك البحث برقم السورة بين 1 و 114، أو بواسطة نص السورة أو الآية.');
+          return;
+        }
       }
 
       const foundSurah = surahs.find(

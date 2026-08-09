@@ -61,6 +61,13 @@ export interface DBProfile {
   email: string;
   avatar_color?: string;
   avatar_url?: string;
+  family_id?: string;
+  role?: string;
+  points?: number;
+  prayers_today?: number;
+  total_prayers?: number;
+  pages_today?: number;
+  total_pages?: number;
   created_at?: string;
 }
 
@@ -91,6 +98,7 @@ export interface DBDailyProgress {
   user_id: string;
   date: string;
   pages_read: number;
+  prayers_completed?: number;
 }
 
 export interface DBReward {
@@ -104,6 +112,20 @@ export interface DBReward {
   currency: string;
   redeemed_today: boolean;
   last_redeemed_at: string | null;
+}
+
+function profileToFamilyMember(p: DBProfile): FamilyMember {
+  return {
+    id: p.id || generateUUID(),
+    userId: p.id,
+    name: typeof p.display_name === 'string' ? p.display_name : 'عضو',
+    points: typeof p.points === 'number' ? p.points : 0,
+    isHead: p.role === 'head',
+    prayersToday: typeof p.prayers_today === 'number' ? p.prayers_today : 0,
+    totalPrayers: typeof p.total_prayers === 'number' ? p.total_prayers : 0,
+    pagesToday: typeof p.pages_today === 'number' ? p.pages_today : 0,
+    totalPages: typeof p.total_pages === 'number' ? p.total_pages : 0,
+  };
 }
 
 function dbToReward(r: DBReward): Reward {
@@ -137,6 +159,7 @@ function rewardToDb(r: Reward, familyId: string): Omit<DBReward, 'id'> {
 function dbToMember(m: DBFamilyMember): FamilyMember {
   return {
     id: m.id || generateUUID(),
+    userId: typeof m.user_id === 'string' ? m.user_id : undefined,
     name: typeof m.display_name === 'string' ? m.display_name : 'عضو',
     points: typeof m.points === 'number' ? m.points : 0,
     isHead: !!m.is_head,
@@ -389,17 +412,17 @@ export async function upsertProfile(profile: UserProfile & { id?: string }): Pro
 export async function fetchFamilyByUserId(userId: string): Promise<FamilyGroup | null> {
   return safeQuery(async () => {
     if (!supabase || !userId) return null;
-    const { data: membership, error: membershipError } = await supabase
-      .from('family_members')
+    const { data: profile, error: profileError } = await supabase!
+      .from('profiles')
       .select('family_id')
-      .eq('user_id', userId)
+      .eq('id', userId)
       .maybeSingle();
 
-    if (membershipError || !membership || typeof membership !== 'object' || !('family_id' in membership)) {
+    if (profileError || !profile || typeof profile !== 'object' || !('family_id' in profile)) {
       return null;
     }
 
-    const familyId = (membership as { family_id: string }).family_id;
+    const familyId = (profile as { family_id?: string }).family_id;
     if (!familyId) return null;
 
     const { data, error } = await supabase
@@ -481,14 +504,14 @@ export async function fetchFamilyMembers(familyId: string): Promise<FamilyMember
   return safeQuery(async () => {
     try {
       const { data, error } = await supabase!
-        .from('family_members')
-        .select('*')
+        .from('profiles')
+        .select('id,display_name,role,points,prayers_today,total_prayers,pages_today,total_pages')
         .eq('family_id', familyId);
       if (error || !Array.isArray(data)) return [];
       const result: FamilyMember[] = [];
       for (const raw of data) {
         try {
-          result.push(dbToMember(raw as DBFamilyMember));
+          result.push(profileToFamilyMember(raw as DBProfile));
         } catch {
           // skip malformed rows
         }
@@ -540,14 +563,14 @@ export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
       return true;
     }
     if (Array.isArray(fg.members) && fg.members.length) {
-      const rows = fg.members.map<DBFamilyMember>((m) => {
+      const rows = fg.members.map<DBProfile>((m) => {
         const userId = m.userId || m.id || generateUUID();
         return {
-          id: m.id || generateUUID(),
-          family_id: famRow.id,
-          user_id: userId,
+          id: userId,
           display_name: m.name || 'عضو',
-          is_head: !!m.isHead,
+          email: `${userId}@guest.tawbah.local`,
+          family_id: famRow.id,
+          role: m.isHead ? 'head' : 'member',
           points: typeof m.points === 'number' ? m.points : 0,
           prayers_today: typeof m.prayersToday === 'number' ? m.prayersToday : 0,
           total_prayers: typeof m.totalPrayers === 'number' ? m.totalPrayers : 0,
@@ -556,7 +579,7 @@ export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
         };
       });
       try {
-        const { error: e2 } = await supabase.from('family_members').upsert(rows, { onConflict: 'id' });
+        const { error: e2 } = await supabase.from('profiles').upsert(rows, { onConflict: 'id' });
         if (e2) return true;
       } catch {
         return true;
@@ -581,34 +604,19 @@ export async function upsertMember(member: FamilyMember, familyId: string): Prom
     const userId = member.userId || member.id;
     if (!userId) return false;
 
-    let rowId = member.id || generateUUID();
-    try {
-      const { data: existing, error: existingError } = await supabase!
-        .from('family_members')
-        .select('id')
-        .eq('family_id', familyId)
-        .eq('user_id', userId)
-        .maybeSingle();
-      if (!existingError && existing && typeof existing === 'object' && typeof existing.id === 'string') {
-        rowId = existing.id;
-      }
-    } catch {
-      // ignore membership lookup errors, fall back to provided row id
-    }
-
-    const row: DBFamilyMember = {
-      id: rowId,
-      family_id: familyId,
-      user_id: userId,
+    const row: DBProfile = {
+      id: userId,
       display_name: member.name,
-      is_head: member.isHead,
+      email: `${userId}@guest.tawbah.local`,
+      family_id: familyId,
+      role: member.isHead ? 'head' : 'member',
       points: member.points,
       prayers_today: member.prayersToday,
       total_prayers: member.totalPrayers,
       pages_today: member.pagesToday,
       total_pages: member.totalPages,
     };
-    const { error } = await supabase!.from('family_members').upsert(row, { onConflict: 'id' });
+    const { error } = await supabase!.from('profiles').upsert(row, { onConflict: 'id' });
     return !error;
   }, false);
 }
@@ -668,10 +676,20 @@ export async function upsertDailyProgress(progress: {
       user_id: progress.userId,
       date: progress.date,
       pages_read: progress.stats.totalPagesRead,
+      prayers_completed: progress.stats.totalPrayersOnTime + progress.stats.totalPrayersLate,
     };
+
+    if (existing && typeof existing === 'object' && typeof existing.id === 'string') {
+      const { error } = await supabase!
+        .from('daily_progress')
+        .update(row)
+        .eq('id', existing.id);
+      return !error;
+    }
+
     const { error } = await supabase!
       .from('daily_progress')
-      .upsert(row, { onConflict: 'id' });
+      .insert(row);
     return !error;
   }, false);
 }

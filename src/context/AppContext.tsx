@@ -244,6 +244,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
+    let isMounted = true;
+    const authTimeout = window.setTimeout(() => {
+      if (isMounted) {
+        setAuthLoading(false);
+      }
+    }, 6000);
+
     localStorage.setItem('tawbah:userid', userId);
     const local = readLocalProfile();
     if (local && !profile.loggedIn) {
@@ -303,14 +310,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
         } catch {
           // ignore session fetch failures; local state remains
         } finally {
-          setAuthLoading(false);
+          if (isMounted) {
+            setAuthLoading(false);
+          }
+          window.clearTimeout(authTimeout);
         }
       })();
     } else {
       const localProf = loadState<UserProfile>('profile', defaultProfile);
       setAuthenticated(localProf.loggedIn);
       setAuthLoading(false);
+      window.clearTimeout(authTimeout);
     }
+
+    return () => {
+      isMounted = false;
+      window.clearTimeout(authTimeout);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
