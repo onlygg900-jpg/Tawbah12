@@ -249,7 +249,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (isMounted) {
         setAuthLoading(false);
       }
-    }, 6000);
+    }, 4000);
 
     localStorage.setItem('tawbah:userid', userId);
     const local = readLocalProfile();

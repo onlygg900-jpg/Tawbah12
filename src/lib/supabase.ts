@@ -412,17 +412,17 @@ export async function upsertProfile(profile: UserProfile & { id?: string }): Pro
 export async function fetchFamilyByUserId(userId: string): Promise<FamilyGroup | null> {
   return safeQuery(async () => {
     if (!supabase || !userId) return null;
-    const { data: profile, error: profileError } = await supabase!
-      .from('profiles')
+    const { data: memberRow, error: memberError } = await supabase!
+      .from('family_members')
       .select('family_id')
-      .eq('id', userId)
+      .eq('user_id', userId)
       .maybeSingle();
 
-    if (profileError || !profile || typeof profile !== 'object' || !('family_id' in profile)) {
+    if (memberError || !memberRow || typeof memberRow !== 'object' || !('family_id' in memberRow)) {
       return null;
     }
 
-    const familyId = (profile as { family_id?: string }).family_id;
+    const familyId = (memberRow as { family_id?: string }).family_id;
     if (!familyId) return null;
 
     const { data, error } = await supabase
@@ -504,14 +504,26 @@ export async function fetchFamilyMembers(familyId: string): Promise<FamilyMember
   return safeQuery(async () => {
     try {
       const { data, error } = await supabase!
-        .from('profiles')
-        .select('id,display_name,role,points,prayers_today,total_prayers,pages_today,total_pages')
+        .from('family_members')
+        .select('*, profiles(*)')
         .eq('family_id', familyId);
       if (error || !Array.isArray(data)) return [];
       const result: FamilyMember[] = [];
       for (const raw of data) {
         try {
-          result.push(profileToFamilyMember(raw as DBProfile));
+          const m = raw as DBFamilyMember & { profiles?: DBProfile | null };
+          const profile = m.profiles;
+          result.push({
+            id: m.id || generateUUID(),
+            userId: typeof m.user_id === 'string' ? m.user_id : undefined,
+            name: (profile && typeof profile.display_name === 'string' && profile.display_name) || (typeof m.display_name === 'string' && m.display_name) || 'عضو',
+            points: typeof m.points === 'number' ? m.points : 0,
+            isHead: !!m.is_head,
+            prayersToday: typeof m.prayers_today === 'number' ? m.prayers_today : 0,
+            totalPrayers: typeof m.total_prayers === 'number' ? m.total_prayers : 0,
+            pagesToday: typeof m.pages_today === 'number' ? m.pages_today : 0,
+            totalPages: typeof m.total_pages === 'number' ? m.total_pages : 0,
+          });
         } catch {
           // skip malformed rows
         }
@@ -549,7 +561,7 @@ export async function fetchFamilyRewards(familyId: string): Promise<Reward[]> {
 export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
   return safeQuery(async () => {
     if (!supabase) return true;
-    const famRow: DBFamily = {
+    const famRow: Partial<DBFamily> & { id: string; created_by?: string } = {
       id: fg.id || `fam-${Date.now().toString(36)}`,
       name: fg.name || 'عائلة توبة',
       code: (fg.code || 'LOCAL').toUpperCase(),
@@ -557,32 +569,60 @@ export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
       treasury_balance: typeof fg.treasury === 'number' ? fg.treasury : 0,
     };
     try {
+      const sessionUser = await fetchCurrentSession();
+      if (sessionUser) famRow.created_by = sessionUser.id;
+    } catch {
+      // ignore
+    }
+    try {
       const { error: e1 } = await supabase.from('families').upsert(famRow, { onConflict: 'id' });
       if (e1) return true;
     } catch {
       return true;
     }
     if (Array.isArray(fg.members) && fg.members.length) {
-      const rows = fg.members.map<DBProfile>((m) => {
-        const userId = m.userId || m.id || generateUUID();
-        return {
-          id: userId,
-          display_name: m.name || 'عضو',
-          email: `${userId}@guest.tawbah.local`,
-          family_id: famRow.id,
-          role: m.isHead ? 'head' : 'member',
-          points: typeof m.points === 'number' ? m.points : 0,
-          prayers_today: typeof m.prayersToday === 'number' ? m.prayersToday : 0,
-          total_prayers: typeof m.totalPrayers === 'number' ? m.totalPrayers : 0,
-          pages_today: typeof m.pagesToday === 'number' ? m.pagesToday : 0,
-          total_pages: typeof m.totalPages === 'number' ? m.totalPages : 0,
-        };
-      });
-      try {
-        const { error: e2 } = await supabase.from('profiles').upsert(rows, { onConflict: 'id' });
-        if (e2) return true;
-      } catch {
-        return true;
+      for (const m of fg.members) {
+        const userId = m.userId || m.id;
+        if (!userId) continue;
+        try {
+          await supabase.from('profiles').upsert({
+            id: userId,
+            display_name: m.name || 'عضو',
+            email: m.userId ? `${userId}@guest.tawbah.local` : undefined,
+          }, { onConflict: 'id' });
+        } catch {
+          // ignore profile upsert
+        }
+        try {
+          const { error: e2 } = await supabase.from('family_members').upsert({
+            id: m.id || undefined,
+            family_id: famRow.id,
+            user_id: userId,
+            display_name: m.name || 'عضو',
+            is_head: !!m.isHead,
+            points: typeof m.points === 'number' ? m.points : 0,
+            prayers_today: typeof m.prayersToday === 'number' ? m.prayersToday : 0,
+            total_prayers: typeof m.totalPrayers === 'number' ? m.totalPrayers : 0,
+            pages_today: typeof m.pagesToday === 'number' ? m.pagesToday : 0,
+            total_pages: typeof m.totalPages === 'number' ? m.totalPages : 0,
+          }, { onConflict: 'user_id' });
+          if (e2) {
+            // try insert without id to let DB generate one
+            await supabase.from('family_members').upsert({
+              family_id: famRow.id,
+              user_id: userId,
+              display_name: m.name || 'عضو',
+              is_head: !!m.isHead,
+              points: typeof m.points === 'number' ? m.points : 0,
+              prayers_today: typeof m.prayersToday === 'number' ? m.prayersToday : 0,
+              total_prayers: typeof m.totalPrayers === 'number' ? m.totalPrayers : 0,
+              pages_today: typeof m.pagesToday === 'number' ? m.pagesToday : 0,
+              total_pages: typeof m.totalPages === 'number' ? m.totalPages : 0,
+            }, { onConflict: 'user_id' });
+          }
+        } catch {
+          // ignore member upsert
+        }
       }
     }
     return true;
@@ -604,19 +644,27 @@ export async function upsertMember(member: FamilyMember, familyId: string): Prom
     const userId = member.userId || member.id;
     if (!userId) return false;
 
-    const row: DBProfile = {
-      id: userId,
-      display_name: member.name,
-      email: `${userId}@guest.tawbah.local`,
+    try {
+      await supabase!.from('profiles').upsert({
+        id: userId,
+        display_name: member.name,
+      }, { onConflict: 'id' });
+    } catch {
+      // ignore profile upsert
+    }
+
+    const { error } = await supabase!.from('family_members').upsert({
+      id: member.id || undefined,
       family_id: familyId,
-      role: member.isHead ? 'head' : 'member',
-      points: member.points,
-      prayers_today: member.prayersToday,
-      total_prayers: member.totalPrayers,
-      pages_today: member.pagesToday,
-      total_pages: member.totalPages,
-    };
-    const { error } = await supabase!.from('profiles').upsert(row, { onConflict: 'id' });
+      user_id: userId,
+      display_name: member.name,
+      is_head: !!member.isHead,
+      points: typeof member.points === 'number' ? member.points : 0,
+      prayers_today: typeof member.prayersToday === 'number' ? member.prayersToday : 0,
+      total_prayers: typeof member.totalPrayers === 'number' ? member.totalPrayers : 0,
+      pages_today: typeof member.pagesToday === 'number' ? member.pagesToday : 0,
+      total_pages: typeof member.totalPages === 'number' ? member.totalPages : 0,
+    }, { onConflict: 'user_id' });
     return !error;
   }, false);
 }
@@ -727,42 +775,44 @@ export function subscribeAuthChanges(callback: (user: AuthStateUser | null) => v
   if (!available || !supabase) {
     return () => {};
   }
-  const { data } = supabase.auth.onAuthStateChange(async (_event, session) => {
-    if (typeof window !== 'undefined' && (window.location.hash.includes('access_token') || window.location.hash.includes('refresh_token'))) {
-      cleanOAuthHash();
-    }
-    if (session?.user) {
-      const u = session.user;
-      const displayName = (u.user_metadata?.full_name as string) || (u.user_metadata?.name as string) || u.email?.split('@')[0] || 'مستخدم توبة';
-      const avatarUrl = (u.user_metadata?.avatar_url as string) || null;
-      const profile: DBProfile = {
-        id: u.id,
-        display_name: displayName,
-        email: u.email || '',
-      };
-      try {
-        await supabase!.from('profiles').upsert(profile, { onConflict: 'id' });
-      } catch {
-        // ignore profile upsert failures
+  const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    (async () => {
+      if (typeof window !== 'undefined' && (window.location.hash.includes('access_token') || window.location.hash.includes('refresh_token'))) {
+        cleanOAuthHash();
       }
-      await upsertLocalProfile({
-        id: u.id,
-        displayName,
-        email: u.email || '',
-        avatarColor: '#064e3b',
-        success: true,
-        method: 'google',
-      });
-      callback({
-        id: u.id,
-        displayName,
-        email: u.email || '',
-        avatarColor: '#064e3b',
-        avatarUrl,
-      });
-    } else {
-      callback(null);
-    }
+      if (session?.user) {
+        const u = session.user;
+        const displayName = (u.user_metadata?.full_name as string) || (u.user_metadata?.name as string) || u.email?.split('@')[0] || 'مستخدم توبة';
+        const avatarUrl = (u.user_metadata?.avatar_url as string) || null;
+        const profile: DBProfile = {
+          id: u.id,
+          display_name: displayName,
+          email: u.email || '',
+        };
+        try {
+          await supabase!.from('profiles').upsert(profile, { onConflict: 'id' });
+        } catch {
+          // ignore profile upsert failures
+        }
+        await upsertLocalProfile({
+          id: u.id,
+          displayName,
+          email: u.email || '',
+          avatarColor: '#064e3b',
+          success: true,
+          method: 'google',
+        });
+        callback({
+          id: u.id,
+          displayName,
+          email: u.email || '',
+          avatarColor: '#064e3b',
+          avatarUrl,
+        });
+      } else {
+        callback(null);
+      }
+    })();
   });
   return () => {
     try { data.subscription.unsubscribe(); } catch { /* ignore */ }
@@ -772,7 +822,11 @@ export function subscribeAuthChanges(callback: (user: AuthStateUser | null) => v
 export async function fetchCurrentSession(): Promise<AuthStateUser | null> {
   if (!available || !supabase) return null;
   try {
-    const { data } = await supabase.auth.getSession();
+    const sessionPromise = supabase.auth.getSession();
+    const timeoutPromise = new Promise<{ data: { session: null } }>((resolve) =>
+      setTimeout(() => resolve({ data: { session: null } }), 5000)
+    );
+    const { data } = await Promise.race([sessionPromise, timeoutPromise]);
     const session = data.session;
     if (!session?.user) return null;
     const u = session.user;

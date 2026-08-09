@@ -2,6 +2,7 @@ import { useState, useEffect, lazy, Suspense } from 'react';
 import { useApp } from '@/context/AppContext';
 import BottomNav from '@/components/BottomNav';
 import SideNav from '@/components/SideNav';
+import AIAssistant from '@/components/AIAssistant';
 import type { ViewKey } from '@/types';
 
 const HomeView = lazy(() => import('@/components/HomeView'));
@@ -59,6 +60,7 @@ function App() {
         </main>
       </div>
       <BottomNav current={view} onChange={setView} />
+      <AIAssistant />
     </div>
   );
 }

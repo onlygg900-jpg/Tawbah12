@@ -283,6 +283,7 @@ function QuranReader({ surahId, onBack, onSurahChange, surahs }: QuranReaderProp
   const [currentAyah, setCurrentAyah] = useState(0);
   const [audioError, setAudioError] = useState<string | null>(null);
   const [selectedVerse, setSelectedVerse] = useState<{ index: number; ayah: Ayah } | null>(null);
+  const [currentPage, setCurrentPage] = useState<number>(1);
   const [tafsir, setTafsir] = useState<{ open: boolean; text: string; loading: boolean; key: string }>({
     open: false,
     text: '',
@@ -310,10 +311,14 @@ function QuranReader({ surahId, onBack, onSurahChange, surahs }: QuranReaderProp
     try {
       const list = await fetchAyahs(surahId);
       if (list.length === 0) {
-        throw new Error('لم يتم العثور على آيات لهذه الصفحة.');
+        throw new Error('لم يتم العثور على آيات لهذه السورة.');
       }
       setAyahs(list);
       ayahsRef.current = list;
+      const firstPage = list.length > 0 && typeof list[0].page === 'number' && Number.isFinite(list[0].page)
+        ? list[0].page
+        : (currentSurah ? Number(String(currentSurah.pages).split('-')[0]) || 1 : 1);
+      setCurrentPage(firstPage);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'تعذّر تحميل الآيات');
     } finally {
@@ -487,7 +492,9 @@ function QuranReader({ surahId, onBack, onSurahChange, surahs }: QuranReaderProp
               {currentSurah ? `سورة ${currentSurah.arabicName}` : 'القرآن الكريم'}
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              {currentSurah ? `${currentSurah.englishName} · ${currentSurah.versesCount} آية` : 'جارٍ التحميل...'}
+              {currentSurah
+                ? `${currentSurah.englishName} · ${currentSurah.versesCount} آية · صفحة ${currentPage}`
+                : 'جارٍ التحميل...'}
             </p>
           </div>
           <button
