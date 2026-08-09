@@ -41,6 +41,12 @@ export default function QuranView() {
   const [searching, setSearching] = useState(false);
   const [allAyahs, setAllAyahs] = useState<Ayah[]>([]);
 
+  const normalizePage = (value: number | string | null | undefined) => {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(parsed) || Number.isNaN(parsed)) return 1;
+    return Math.max(1, Math.min(604, Math.floor(parsed)));
+  };
+
   const load = async () => {
     setLoading(true);
     setError(null);
@@ -86,7 +92,7 @@ export default function QuranView() {
     setSearching(true);
     try {
       const pageNumber = Number(q);
-      if (!Number.isNaN(pageNumber) && pageNumber >= 1 && pageNumber <= 604) {
+      if (Number.isFinite(pageNumber) && !Number.isNaN(pageNumber) && pageNumber >= 1 && pageNumber <= 604) {
         openPage(pageNumber);
         return;
       }
@@ -150,8 +156,7 @@ export default function QuranView() {
   }, [surahs, query]);
 
   const openPage = (page: number, khatmaId?: string) => {
-    const safePage = Number.isFinite(page) && !Number.isNaN(page) ? page : 1;
-    const normalizedPage = Math.max(1, Math.min(604, safePage));
+    const normalizedPage = normalizePage(page);
     setPageToRead(normalizedPage);
     setActiveKhatmaId(khatmaId ?? null);
     setSubView('reader');
@@ -159,7 +164,7 @@ export default function QuranView() {
 
   const openSurah = (s: Surah) => {
     const pages = String(s.pages).split('-').map(Number);
-    const firstPage = Number.isFinite(pages[0]) && !Number.isNaN(pages[0]) ? pages[0] : 1;
+    const firstPage = pages[0];
     openPage(firstPage);
   };
 
@@ -266,6 +271,11 @@ interface QuranReaderProps {
 function QuranReader({ page, onBack, onPageChange, activeKhatmaId, surahs }: QuranReaderProps) {
   const { updateKhatmaPage, addQuranPages } = useApp();
   const [ayahs, setAyahs] = useState<Ayah[]>([]);
+  const normalizePage = (value: number | string | null | undefined) => {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(parsed) || Number.isNaN(parsed)) return 1;
+    return Math.max(1, Math.min(604, Math.floor(parsed)));
+  };
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reciter, setReciter] = useState<Reciter>(RECITERS[0]);
@@ -322,7 +332,7 @@ function QuranReader({ page, onBack, onPageChange, activeKhatmaId, surahs }: Qur
   }, [page]);
 
   const changePage = (newPage: number) => {
-    const safePage = Number.isFinite(newPage) && !Number.isNaN(newPage) ? newPage : page;
+    const safePage = normalizePage(newPage);
     if (safePage < 1 || safePage > 604 || safePage === page) return;
     const delta = safePage - page;
     onPageChange(safePage);
