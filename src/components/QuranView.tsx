@@ -26,7 +26,7 @@ import { fetchSurahs, fetchAyahs, fetchAllAyahs, fetchTafsir, RECITERS, ayahAudi
 import type { Ayah } from '@/services/quranService';
 import type { Surah, Reciter, QuranKhatma } from '@/types';
 import { SectionCard, ErrorBanner, LoadingSpinner, Modal, EmptyState } from '@/components/ui';
-import MushafPageView from '@/components/MushafPageView';
+import MushafViewer from '@/components/MushafViewer';
 
 type SubView = 'list' | 'reader' | 'khatma' | 'mushaf';
 
@@ -267,7 +267,7 @@ export default function QuranView() {
       {subView === 'khatma' && <KhatmaTracker onOpenSurah={openSurah} onOpenPage={openPage} surahs={surahs} />}
 
       {subView === 'mushaf' && (
-        <MushafPageView
+        <MushafViewer
           page={mushafPage}
           surahs={surahs}
           khatmaId={activeKhatmaId}

@@ -160,3 +160,86 @@ export function ayahAudioFallbackUrl(reciter: Reciter, surahId: number, ayah: nu
   const slug = map[reciter.id] ?? 'Alafasy_128kbps';
   return `https://audio.qurancdn.com/${slug}/ayah/${surahId}:${ayah}.mp3`;
 }
+
+// ============================================================================
+// JUZ (Part) start pages  (Mushaf al-Madinah, 604 pages, 30 Ajsa')
+// ============================================================================
+export const JUZ_START_PAGES: Array<{ juz: number; page: number; arabicName: string }> = [
+  { juz: 1,  page: 1,   arabicName: "الم" },
+  { juz: 2,  page: 22,  arabicName: "سَيَقُولُ" },
+  { juz: 3,  page: 42,  arabicName: "تِلْكَ الرُّسُلُ" },
+  { juz: 4,  page: 62,  arabicName: "لَنْ تَنَالُوا" },
+  { juz: 5,  page: 82,  arabicName: "وَالْمُحْصَنَاتُ" },
+  { juz: 6,  page: 102, arabicName: "لَا يُحِبُّ اللَّهُ" },
+  { juz: 7,  page: 121, arabicName: "وَإِذَا سَمِعُوا" },
+  { juz: 8,  page: 141, arabicName: "وَلَوْ أَنَّنَا" },
+  { juz: 9,  page: 161, arabicName: "قَالَ الْمَلَأُ" },
+  { juz: 10, page: 181, arabicName: "وَاعْلَمُوا" },
+  { juz: 11, page: 200, arabicName: "يَعْتَذِرُونَ" },
+  { juz: 12, page: 220, arabicName: "وَمَا مِنْ دَابَّةٍ" },
+  { juz: 13, page: 240, arabicName: "وَمَا لِيَ" },
+  { juz: 14, page: 259, arabicName: "رُبَمَا" },
+  { juz: 15, page: 278, arabicName: "سُبْحَانَ الَّذِي" },
+  { juz: 16, page: 298, arabicName: "قَالَ أَلَمْ" },
+  { juz: 17, page: 318, arabicName: "اقْتَرَبَ لِلنَّاسِ" },
+  { juz: 18, page: 338, arabicName: "قَدْ أَفْلَحَ" },
+  { juz: 19, page: 357, arabicName: "وَقَالَ الَّذِينَ" },
+  { juz: 20, page: 377, arabicName: "أَمَّنْ خَلَقَ" },
+  { juz: 21, page: 396, arabicName: "اتْلُ مَا أُوحِيَ" },
+  { juz: 22, page: 415, arabicName: "وَمَنْ يَقْنُتْ" },
+  { juz: 23, page: 434, arabicName: "وَمَا لِيَ" },
+  { juz: 24, page: 453, arabicName: "فَمَنْ أَظْلَمُ" },
+  { juz: 25, page: 473, arabicName: "إِلَيْهِ يُرَدُّ" },
+  { juz: 26, page: 493, arabicName: "حم" },
+  { juz: 27, page: 512, arabicName: "قَالَ فَمَا خَطْبُكُمْ" },
+  { juz: 28, page: 532, arabicName: "قَدْ سَمِعَ اللَّهُ" },
+  { juz: 29, page: 552, arabicName: "تَبَارَكَ الَّذِي" },
+  { juz: 30, page: 572, arabicName: "عَمَّ يَتَسَاءَلُونَ" },
+];
+
+export function juzForPage(page: number): { juz: number; arabicName: string } {
+  let current = JUZ_START_PAGES[0];
+  for (const j of JUZ_START_PAGES) {
+    if (page >= j.page) current = j;
+  }
+  return { juz: current.juz, arabicName: current.arabicName };
+}
+
+export interface SurahOnPage {
+  surahId: number;
+  arabicName: string;
+  englishName: string;
+  revelationPlace: string;
+  firstAyahInPage: number;
+}
+
+// Returns the list of Surahs whose first verse appears on the given page,
+// so we can render the traditional decorative Surah header inside the page.
+export function surahsStartingOnPage(
+  surahs: Array<{ id: number; arabicName: string; englishName: string; revelationPlace: string; pages: string }>,
+  page: number,
+  allAyahs: Ayah[]
+): SurahOnPage[] {
+  const result: SurahOnPage[] = [];
+  const pageAyahs = allAyahs.filter((a) => a.page === page);
+  const seen = new Set<number>();
+  for (const ayah of pageAyahs) {
+    const [sid, anum] = ayah.verseKey.split(":").map(Number);
+    if (anum === 1 && !seen.has(sid)) {
+      seen.add(sid);
+      const s = surahs.find((x) => x.id === sid);
+      if (s) {
+        result.push({
+          surahId: sid,
+          arabicName: s.arabicName,
+          englishName: s.englishName,
+          revelationPlace: s.revelationPlace,
+          firstAyahInPage: 1,
+        });
+      }
+    }
+  }
+  return result;
+}
+
+export const TOTAL_QURAN_PAGES = 604;
