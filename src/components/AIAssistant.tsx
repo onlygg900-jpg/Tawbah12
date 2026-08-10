@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { MessageCircle, X, Send, Sparkles } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -13,6 +12,50 @@ const SUGGESTIONS = [
   'ما هي أذكار الصباح؟',
   'كيف أبدأ ختمة القرآن؟',
 ];
+
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
+const GEMINI_MODEL = 'gemini-1.5-flash';
+const GEMINI_API_URL =
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+const SYSTEM_PROMPT = `أنت "توبة"، مساعد ذكي إسلامي ودود ومحترم ومختصر. تجيب على الأسئلة الإسلامية والعامة باللغة العربية وبأسلوب لطيف مبسط.
+
+قواعد الإجابة:
+1. اجب بالعربية دائماً.
+2. كن مختصراً (3-5 أسطر عادة) إلا إذا طلب المستخدم التفصيل.
+3. عند الاستشهاد بآية قرآنية اذكر رقم السورة والآية بين قوسين.
+4. عند ذكر حديث اذكر المصدر (صحيح البخاري، مسلم، إلخ) إن كنت متأكداً.
+5. إذا لم تكن متأكداً من إجابة شرعية: قل ذلك صراحة، واقترح مراجعة عالم متخصص أو مرجع موثوق.
+6. لا تفتي في مسائل فقهية خلافية؛ أحل المستخدم لمراجعها.
+7. شجع المستخدم دائماً على الطاعات والتوبة والأعمال الصالحة.
+8. تجنب المحتوى الضار أو المسيء أو المتعارض مع الشريعة الإسلامية.`;
+
+interface GeminiPart {
+  text: string;
+}
+
+interface GeminiContent {
+  role: 'user' | 'model';
+  parts: GeminiPart[];
+}
+
+function buildGeminiContents(messages: ChatMessage[]): GeminiContent[] {
+  const contents: GeminiContent[] = [];
+  for (const m of messages) {
+    if (!m || typeof m.content !== 'string' || !m.content.trim()) continue;
+    const role: 'user' | 'model' = m.role === 'assistant' ? 'model' : 'user';
+    const last = contents[contents.length - 1];
+    if (last && last.role === role) {
+      last.parts.push({ text: '\n' + m.content.trim() });
+    } else {
+      contents.push({ role, parts: [{ text: m.content.trim() }] });
+    }
+  }
+  if (contents.length === 0 || contents[contents.length - 1].role !== 'user') {
+    contents.push({ role: 'user', parts: [{ text: 'السلام عليكم' }] });
+  }
+  return contents;
+}
 
 export default function AIAssistant() {
   const [open, setOpen] = useState(false);
@@ -32,39 +75,104 @@ export default function AIAssistant() {
     if (!trimmed || loading) return;
 
     const userMsg: ChatMessage = { role: 'user', content: trimmed };
-    setMessages((m) => [...m, userMsg]);
+    const nextMessages = [...messages, userMsg];
+    setMessages(nextMessages);
     setInput('');
     setLoading(true);
 
     try {
-      const nextMessages = [...messages, userMsg].map((m) => ({ role: m.role, content: m.content }));
-      const { data, error } = await supabase.functions.invoke('ai-assistant', {
-        body: { messages: nextMessages },
-        headers: {
-          'Accept': 'application/json',
+      if (!GEMINI_API_KEY || GEMINI_API_KEY.includes('your-key') || GEMINI_API_KEY.length < 10) {
+        throw new Error('مفتاح Gemini غير مهيأ في ملف .env (VITE_GEMINI_API_KEY مفقود أو غير صالح).');
+      }
+
+      const contents = buildGeminiContents(nextMessages);
+      const geminiBody = {
+        contents,
+        systemInstruction: {
+          role: 'system' as const,
+          parts: [{ text: SYSTEM_PROMPT }],
         },
+        generationConfig: {
+          temperature: 0.6,
+          topP: 0.95,
+          topK: 40,
+          maxOutputTokens: 1024,
+          responseMimeType: 'text/plain',
+        },
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_LOW_AND_ABOVE' },
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_LOW_AND_ABOVE' },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_LOW_AND_ABOVE' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_LOW_AND_ABOVE' },
+        ],
+      };
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 25_000);
+
+      const res = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(geminiBody),
+        signal: controller.signal,
       });
 
-      if (error) {
-        console.error('AI invoke error:', error);
-        throw new Error(String(error.message || error.context || error));
-      }
-      if (data?.error) {
-        console.error('AI response error:', data.error);
-        throw new Error(data.error);
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        let errText = '';
+        try { errText = await res.text(); } catch { /* ignore */ }
+        console.error(`Gemini HTTP ${res.status}:`, errText.slice(0, 500));
+
+        if (res.status === 401 || res.status === 403) {
+          throw new Error('مفتاح Gemini غير صالح أو مقيد (401/403).');
+        }
+        if (res.status === 429) {
+          throw new Error('الكثير من الطلبات حالياً. حاول بعد لحظات.');
+        }
+        if (res.status >= 500) {
+          throw new Error('خادم Gemini غير متاح حالياً. حاول لاحقاً.');
+        }
+        throw new Error(`خطأ في الاتصال بالمساعد (${res.status}).`);
       }
 
-      const reply = typeof data?.reply === 'string' ? data.reply : 'عذراً، لم أتمكن من توليد رد.';
-      setMessages((m) => [...m, { role: 'assistant', content: reply }]);
+      const data = await res.json();
+      const rawText: string | undefined =
+        data?.candidates?.[0]?.content?.parts?.[0]?.text ??
+        data?.candidates?.[0]?.output;
+
+      const finishReason: string | undefined = data?.candidates?.[0]?.finishReason;
+
+      if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
+        if (finishReason && finishReason !== 'STOP') {
+          setMessages((m) => [
+            ...m,
+            { role: 'assistant', content: 'عذراً، لم أتمكن من توليد رد مناسب لهذا السؤال. جرّب صياغة أخرى.' },
+          ]);
+          return;
+        }
+        throw new Error('لم يتم استلام رد نصي من المساعد الذكي.');
+      }
+
+      setMessages((m) => [...m, { role: 'assistant', content: rawText.trim() }]);
     } catch (e) {
       console.error('AI assistant exception:', e);
-      const msg = e instanceof Error && e.message && !e.message.includes('Unexpected')
-        ? `عذراً، حدث خطأ: ${e.message}`
-        : 'عذراً، تعذّر الاتصال بالمساعد الذكي. تحقق من المفتاح أو حاول مرة أخرى.';
-      setMessages((m) => [
-        ...m,
-        { role: 'assistant', content: msg },
-      ]);
+      let msg: string;
+      if (e instanceof Error) {
+        if (e.name === 'AbortError') {
+          msg = 'عذراً، انتهت مهلة الطلب. الرجاء المحاولة مرة أخرى.';
+        } else if (e.message && !e.message.startsWith('[object') && !e.message.includes('Unexpected')) {
+          msg = `عذراً، حدث خطأ: ${e.message}`;
+        } else {
+          msg = 'عذراً، تعذّر الاتصال بالمساعد الذكي. تحقق من المفتاح أو حاول مرة أخرى.';
+        }
+      } else {
+        msg = 'عذراً، تعذّر الاتصال بالمساعد الذكي. تحقق من المفتاح أو حاول مرة أخرى.';
+      }
+      setMessages((m) => [...m, { role: 'assistant', content: msg }]);
     } finally {
       setLoading(false);
     }

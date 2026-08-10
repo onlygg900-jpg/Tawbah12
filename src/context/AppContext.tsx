@@ -80,7 +80,7 @@ interface AppContextValue {
   updateKhatmaPage: (id: string, page: number) => void;
   removeKhatma: (id: string) => void;
   family: FamilyGroup | null;
-  createFamily: (name: string) => void;
+  createFamily: (name: string) => Promise<void>;
   joinFamily: (code: string) => Promise<void>;
   leaveFamily: () => void;
   addFamilyDonation: (amount: number) => void;
@@ -668,9 +668,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
 
   const createFamily = useCallback(
-    (name: string) => {
+    async (name: string) => {
       const code = Math.random().toString(36).slice(2, 7).toUpperCase();
-      const headMember = {
+      const headMember: FamilyMember = {
         ...makeMember(profile.displayName, true),
         id: userId,
         userId,
@@ -684,13 +684,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
         treasury: 0,
         rewards: [],
       };
-      setFamily(fg);
+
       if (isCloudSync) {
-        void insertFamily(fg).then((ok) => {
-          if (!ok) return;
-          void syncFamilyMembers(fg);
-        });
+        console.log('[createFamily] attempting cloud insert for family:', fg.id, 'code:', fg.code);
+        const ok = await insertFamily(fg);
+        if (!ok) {
+          console.error('[createFamily] FAILED cloud insert — showing alert to user.');
+          alert('⚠️ عذراً، لم يتم إنشاء العائلة في السحابة.\n\nالأسباب المحتملة:\n1) لم يتم تشغيل ملف Migration في Supabase SQL Editor بعد.\n2) قم بفتح Console (F12) واستعراض رسائل الخطأ التفصيلية.\n\nسيتم إنشاء العائلة محلياً فقط.');
+          // Still set local state for offline functionality
+        } else {
+          console.log('[createFamily] SUCCESS cloud insert.');
+          try {
+            await syncFamilyMembers(fg);
+            // Re-fetch to VERIFY data actually persisted
+            const verified = await fetchFamilyByUserId(userId);
+            if (verified && verified.id) {
+              console.log('[createFamily] VERIFIED family exists in DB:', verified.id);
+              setFamily(verified);
+              return;
+            } else {
+              console.warn('[createFamily] WARNING: insertFamily returned true but fetchFamilyByUserId found nothing.');
+            }
+          } catch (e) {
+            console.error('[createFamily] post-insert sync error:', e);
+          }
+        }
       }
+
+      // Fallback / local-only path
+      setFamily(fg);
+      if (isCloudSync) void syncFamilyMembers(fg);
     },
     [profile.displayName, userId, isCloudSync, syncFamilyMembers]
   );
@@ -707,9 +730,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         totalPages: stats.totalPagesRead,
       };
       if (isCloudSync) {
+        console.log('[joinFamily] attempting cloud lookup for code:', code);
         try {
           const remote = await fetchFamilyByCode(code);
           if (remote && remote.id) {
+            console.log('[joinFamily] found remote family:', remote.id, remote.name);
             const safeRemoteMembers = Array.isArray(remote.members) ? remote.members : [];
             const safeRemoteRewards = Array.isArray(remote.rewards) ? remote.rewards : [];
             const alreadyExists = safeRemoteMembers.some((m) =>
@@ -735,40 +760,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
               members: nextMembers,
               rewards: safeRemoteRewards,
             };
-            setFamily(finalFamily);
+
+            let upsertOk = true;
             try {
               if (!alreadyExists) {
-                void upsertMember(currentMember, remote.id);
+                upsertOk = await upsertMember(currentMember, remote.id);
+                if (!upsertOk) console.warn('[joinFamily] upsertMember returned false for new member.');
               } else {
                 const matching = nextMembers.find((m) =>
                   (!!m.userId && !!userId && m.userId === userId) || m.id === userId
                 ) || nextMembers.find((m) => !m.userId && m.name === profile.displayName);
-                if (matching) void upsertMember(matching, remote.id);
+                if (matching) {
+                  upsertOk = await upsertMember(matching, remote.id);
+                  if (!upsertOk) console.warn('[joinFamily] upsertMember returned false for existing member.');
+                }
               }
             } catch (e) {
-              console.error('joinFamily member upsert error:', e);
+              upsertOk = false;
+              console.error('[joinFamily] member upsert exception:', e);
             }
-            try {
-              const refreshedMembers = await fetchFamilyMembers(remote.id);
-              if (Array.isArray(refreshedMembers) && refreshedMembers.length > 0) {
-                setFamily((cur) => {
-                  if (!cur) return cur;
-                  return { ...cur, members: refreshedMembers };
-                });
+
+            setFamily(finalFamily);
+
+            // Background refresh
+            void (async () => {
+              try {
+                const refreshedMembers = await fetchFamilyMembers(remote.id);
+                if (Array.isArray(refreshedMembers) && refreshedMembers.length > 0) {
+                  setFamily((cur) => (cur ? { ...cur, members: refreshedMembers } : cur));
+                }
+                const refreshedRewards = await fetchFamilyRewards(remote.id);
+                if (Array.isArray(refreshedRewards)) {
+                  setFamily((cur) => (cur ? { ...cur, rewards: refreshedRewards } : cur));
+                }
+              } catch (e) {
+                console.warn('[joinFamily] post-join refresh failed:', e);
               }
-            } catch (e) {
-              console.error('joinFamily members refresh error:', e);
-            }
-            try {
-              const refreshedRewards = await fetchFamilyRewards(remote.id);
-              if (Array.isArray(refreshedRewards)) {
-                setFamily((cur) => {
-                  if (!cur) return cur;
-                  return { ...cur, rewards: refreshedRewards };
-                });
-              }
-            } catch (e) {
-              console.error('joinFamily rewards refresh error:', e);
+            })();
+
+            if (!upsertOk) {
+              alert('⚠️ تم الانضمام للعائلة محلياً لكن لم يتم حفظ العضو في السحابة.\nتفقد Console (F12) للتفاصيل، وتأكد من تشغيل Migration في Supabase SQL Editor.');
             }
             return;
           } else {
@@ -776,10 +807,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'تعذر الوصول إلى السحابة.';
-          console.error('joinFamily cloud error:', msg, e);
-          if (msg.includes('الرمز غير صحيح')) {
-            throw e;
-          }
+          console.error('[joinFamily] cloud error:', msg, e);
+          if (msg.includes('الرمز غير صحيح')) throw e;
+          alert(`⚠️ تعذر الوصول إلى السحابة للانضمام:\n${msg}\n\nسيتم الانضمام محلياً فقط.`);
         }
       }
       const localFg: FamilyGroup = {
@@ -794,11 +824,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setFamily(localFg);
       if (isCloudSync) {
         try {
-          void insertFamily(localFg).then((ok) => {
-            if (ok) void syncFamilyMembers(localFg);
-          });
+          const ok = await insertFamily(localFg);
+          if (ok) await syncFamilyMembers(localFg);
         } catch (e) {
-          console.error('joinFamily local->cloud insert error:', e);
+          console.error('[joinFamily] local->cloud insert error:', e);
         }
       }
     },

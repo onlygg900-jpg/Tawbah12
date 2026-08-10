@@ -12,13 +12,23 @@ let available = false;
 if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   try {
     client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true },
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+      global: {
+        headers: {
+          'X-Client-Info': 'tawbah-app/1.0',
+        },
+      },
     });
     available = true;
-  } catch {
+    // eslint-disable-next-line no-console
+    console.log('[supabase] initialized with URL:', SUPABASE_URL);
+  } catch (e) {
+    console.error('[supabase] FAILED to initialize:', e);
     client = null;
     available = false;
   }
+} else {
+  console.warn('[supabase] NOT initialized — VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY missing in .env');
 }
 
 export const supabase = client;
