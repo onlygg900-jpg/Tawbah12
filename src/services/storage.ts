@@ -26,6 +26,23 @@ export function removeState(key: string): void {
   }
 }
 
+function pad(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+export function localDateKey(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  return `${y}-${m}-${day}`;
+}
+
 export function todayKey(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localDateKey();
+}
+
+export function yesterdayKey(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return localDateKey(d);
 }

@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { FamilyGroup, FamilyMember, Reward, SoloStats, UserProfile } from '@/types';
 import { generateUUID } from '@/utils/uuid';
+import { localDateKey } from '@/services/storage';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -98,7 +99,14 @@ export interface DBDailyProgress {
   user_id: string;
   date: string;
   pages_read: number;
+  pages_today?: number;
   prayers_completed?: number;
+  prayers_on_time?: number;
+  prayers_late?: number;
+  prayers_missed?: number;
+  personal_charity?: number;
+  streak_days?: number;
+  tasbeeh_count?: number;
 }
 
 export interface DBReward {
@@ -451,51 +459,81 @@ export async function fetchFamilyByUserId(userId: string): Promise<FamilyGroup |
 export async function fetchFamilyByCode(code: string): Promise<FamilyGroup | null> {
   if (!available || !supabase) return null;
   try {
-    const { data, error } = await supabase
-      .from('families')
-      .select('*')
-      .eq('code', code.toUpperCase())
-      .maybeSingle();
-    if (error || !data) return null;
-    const fam = data as DBFamily;
-    const members = await fetchFamilyMembers(fam.id);
-    const rewards = await fetchFamilyRewards(fam.id);
+    const normalized = code.toUpperCase().trim();
+    const { data: peek, error: peekErr } = await supabase
+      .rpc('peek_family_by_code', { input_code: normalized });
+    if (peekErr || !peek || !Array.isArray(peek) || peek.length === 0) return null;
+    const row = peek[0] as { id?: unknown; name?: unknown; currency?: unknown };
+    const famId = typeof row?.id === 'string' ? row.id : undefined;
+    if (!famId || !isUuid(famId)) return null;
+    const members = await fetchFamilyMembers(famId);
+    const rewards = await fetchFamilyRewards(famId);
     return {
-      id: fam.id,
-      name: typeof fam.name === 'string' ? fam.name || `عائلة ${fam.code}` : `عائلة ${fam.code}`,
-      code: typeof fam.code === 'string' ? fam.code : 'LOCAL',
-      currency: typeof fam.currency === 'string' ? fam.currency || 'ج.م' : 'ج.م',
+      id: famId,
+      name: (typeof row?.name === 'string' && row.name) || `عائلة ${normalized}`,
+      code: normalized,
+      currency: (typeof row?.currency === 'string' && row.currency) || 'ج.م',
       members,
-      treasury: typeof fam.treasury_balance === 'number' ? fam.treasury_balance : 0,
+      treasury: 0,
       rewards,
     };
-  } catch {
+  } catch (e) {
+    console.error('fetchFamilyByCode error:', e);
     return null;
   }
 }
 
 export async function fetchFamilyMembers(familyId: string): Promise<FamilyMember[]> {
   return safeQuery(async () => {
+    if (!available || !supabase || !familyId || !isUuid(familyId)) return [];
     try {
-      const { data, error } = await supabase!
+      const { data, error } = await supabase
         .from('family_members')
         .select('*, profiles(*)')
         .eq('family_id', familyId);
       if (error || !Array.isArray(data)) return [];
+      const memberRows = data as (DBFamilyMember & { profiles?: DBProfile | null })[];
+      const today = localDateKey(new Date());
+      const progressByUser = new Map<string, DBDailyProgress>();
+      try {
+        const userIds = memberRows.map(m => m.user_id).filter((v): v is string => typeof v === 'string' && isUuid(v));
+        if (userIds.length > 0) {
+          const { data: dp, error: dpErr } = await supabase
+            .from('daily_progress')
+            .select('*')
+            .in('user_id', userIds)
+            .eq('date', today);
+          if (!dpErr && Array.isArray(dp)) {
+            for (const row of dp) {
+              const r = row as DBDailyProgress;
+              if (r && typeof r.user_id === 'string') {
+                progressByUser.set(r.user_id, r);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error('fetchFamilyMembers.dailyProgress error:', e);
+      }
       const result: FamilyMember[] = [];
-      for (const raw of data) {
+      for (const m of memberRows) {
         try {
-          const m = raw as DBFamilyMember & { profiles?: DBProfile | null };
           const profile = m.profiles;
+          const dp = typeof m.user_id === 'string' ? progressByUser.get(m.user_id) : undefined;
+          const pToday = typeof dp?.pages_today === 'number' ? dp.pages_today
+            : (typeof dp?.pages_read === 'number' ? dp.pages_read : undefined);
+          const prayersOnTime = typeof dp?.prayers_on_time === 'number' ? dp.prayers_on_time
+            : (typeof dp?.prayers_completed === 'number' ? dp.prayers_completed : 0);
+          const prayersLate = typeof dp?.prayers_late === 'number' ? dp.prayers_late : 0;
           result.push({
             id: m.id || generateUUID(),
             userId: typeof m.user_id === 'string' ? m.user_id : undefined,
             name: (profile && typeof profile.display_name === 'string' && profile.display_name) || (typeof m.display_name === 'string' && m.display_name) || 'عضو',
             points: typeof m.points === 'number' ? m.points : 0,
             isHead: !!m.is_head,
-            prayersToday: typeof m.prayers_today === 'number' ? m.prayers_today : 0,
+            prayersToday: pToday !== undefined ? (prayersOnTime + prayersLate) : (typeof m.prayers_today === 'number' ? m.prayers_today : 0),
             totalPrayers: typeof m.total_prayers === 'number' ? m.total_prayers : 0,
-            pagesToday: typeof m.pages_today === 'number' ? m.pages_today : 0,
+            pagesToday: pToday !== undefined ? pToday : (typeof m.pages_today === 'number' ? m.pages_today : 0),
             totalPages: typeof m.total_pages === 'number' ? m.total_pages : 0,
           });
         } catch {
@@ -503,7 +541,8 @@ export async function fetchFamilyMembers(familyId: string): Promise<FamilyMember
         }
       }
       return result;
-    } catch {
+    } catch (e) {
+      console.error('fetchFamilyMembers error:', e);
       return [];
     }
   }, []);
@@ -677,6 +716,7 @@ export async function upsertDailyProgress(progress: {
   userId: string;
   date: string;
   stats: SoloStats;
+  tasbeehCount?: number;
 }): Promise<boolean> {
   return safeQuery(async () => {
     if (!progress.userId || !progress.date || !isUuid(progress.userId)) return false;
@@ -685,12 +725,22 @@ export async function upsertDailyProgress(progress: {
       user_id: progress.userId,
       date: progress.date,
       pages_read: progress.stats.totalPagesRead,
+      pages_today: progress.stats.pagesReadToday,
       prayers_completed: progress.stats.totalPrayersOnTime + progress.stats.totalPrayersLate,
+      prayers_on_time: progress.stats.totalPrayersOnTime,
+      prayers_late: progress.stats.totalPrayersLate,
+      prayers_missed: progress.stats.totalPrayersMissed,
+      personal_charity: progress.stats.personalCharity,
+      streak_days: progress.stats.streak,
+      tasbeeh_count: progress.tasbeehCount,
     };
 
     const { error } = await supabase!
       .from('daily_progress')
-      .upsert(row, { onConflict: 'user_id,date' });
+      .upsert(row, { onConflict: 'user_id, date', ignoreDuplicates: false, defaultToNull: false });
+    if (error) {
+      console.error('upsertDailyProgress error:', error.message, error.code, error.details);
+    }
     return !error;
   }, false);
 }
@@ -802,26 +852,52 @@ export async function fetchDailyProgress(userId: string, date: string): Promise<
     try {
       const { data, error } = await supabase!
         .from('daily_progress')
-        .select('pages_read')
+        .select('*')
         .eq('user_id', userId)
         .eq('date', date)
         .maybeSingle();
       if (error || !data || typeof data !== 'object') return null;
-      const p = data as { pages_read?: number };
-      const pages = typeof p.pages_read === 'number' ? p.pages_read : 0;
+      const p = data as DBDailyProgress;
+      const pagesCumulative = typeof p.pages_read === 'number' ? p.pages_read : 0;
+      const pagesToday = typeof p.pages_today === 'number' ? p.pages_today : pagesCumulative;
+      const totalCompleted = typeof p.prayers_completed === 'number' ? p.prayers_completed : 0;
+      const onTime = typeof p.prayers_on_time === 'number' ? p.prayers_on_time : totalCompleted;
+      const late = typeof p.prayers_late === 'number' ? p.prayers_late : 0;
+      const missed = typeof p.prayers_missed === 'number' ? p.prayers_missed : 0;
+      const charity = typeof p.personal_charity === 'number' ? p.personal_charity : 0;
+      const streak = typeof p.streak_days === 'number' ? p.streak_days : 0;
       return {
-        streak: 0,
-        totalPrayersOnTime: 0,
-        totalPrayersLate: 0,
-        totalPrayersMissed: 0,
-        personalCharity: 0,
-        pagesReadToday: pages,
-        totalPagesRead: pages,
+        streak,
+        totalPrayersOnTime: Math.max(onTime, totalCompleted - late),
+        totalPrayersLate: late,
+        totalPrayersMissed: missed,
+        personalCharity: charity,
+        pagesReadToday: pagesToday,
+        totalPagesRead: pagesCumulative,
         badges: [],
         lastCompletedDate: null,
       };
-    } catch {
+    } catch (e) {
+      console.error('fetchDailyProgress error:', e);
       return null;
     }
   }, null);
+}
+
+export async function fetchTasbeehForToday(userId: string, date: string): Promise<number | null> {
+  if (!available || !supabase || !userId || !isUuid(userId)) return null;
+  try {
+    const { data, error } = await supabase
+      .from('daily_progress')
+      .select('tasbeeh_count')
+      .eq('user_id', userId)
+      .eq('date', date)
+      .maybeSingle();
+    if (error || !data) return null;
+    const count = (data as { tasbeeh_count?: unknown }).tasbeeh_count;
+    return typeof count === 'number' ? count : null;
+  } catch (e) {
+    console.error('fetchTasbeehForToday error:', e);
+    return null;
+  }
 }

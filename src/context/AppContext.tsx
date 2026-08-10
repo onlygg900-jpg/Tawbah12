@@ -18,7 +18,7 @@ import type {
   TasbeehCount,
   Reward,
 } from '@/types';
-import { loadState, saveState, todayKey } from '@/services/storage';
+import { loadState, saveState, todayKey, localDateKey } from '@/services/storage';
 import { defaultNotificationSettings } from '@/services/notificationService';
 import { PRAYER_KEYS, detectLocation, type LocationCoords } from '@/services/prayerService';
 import { schedulePrayerChecks } from '@/services/notificationService';
@@ -88,6 +88,8 @@ interface AppContextValue {
   removeFamilyReward: (id: string) => void;
   redeemFamilyReward: (memberId: string, rewardId: string) => void;
   updateMemberStat: (memberId: string, patch: Partial<FamilyMember>) => void;
+  refreshFamily: () => Promise<void>;
+  isCurrentMember: (m: Partial<FamilyMember>) => boolean;
   prayers: Array<{ key: string; label: string; time: string }>;
   setPrayers: (p: Array<{ key: string; label: string; time: string }>) => void;
   location: LocationCoords | null;
@@ -146,8 +148,13 @@ function safeFamilyGroup(value: unknown): FamilyGroup | null {
   };
 }
 
-function isCurrentFamilyMember(member: FamilyMember, userId: string, displayName: string): boolean {
-  return member.userId === userId || member.id === userId || member.name === displayName;
+function isCurrentFamilyMember(member: FamilyMember, userId: string, displayName: string, isCloud: boolean): boolean {
+  if (isCloud && (member.userId || userId)) {
+    return !!member.userId && member.userId === userId;
+  }
+  return member.userId === userId
+    || member.id === userId
+    || (!!displayName && member.name === displayName);
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -197,12 +204,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => saveState('family', family), [family]);
 
   useEffect(() => {
-    if (tracking.date !== todayKey()) {
-      setTracking(emptyTracking());
-    }
-    if (tasbeeh.date !== todayKey()) {
-      setTasbeeh({ date: todayKey(), count: 0 });
-    }
+    const rolloverIfNeeded = () => {
+      const tk = todayKey();
+      setTracking((t) => (t.date !== tk ? emptyTracking() : t));
+      setTasbeeh((t) => (t.date !== tk ? { date: tk, count: 0 } : t));
+    };
+    rolloverIfNeeded();
+    const intervalId = window.setInterval(rolloverIfNeeded, 60_000);
+    return () => window.clearInterval(intervalId);
   }, []);
 
   useEffect(() => {
@@ -286,17 +295,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
             try {
               const dbStats = await fetchDailyProgress(sessionUser.id, todayKey());
               if (dbStats && typeof dbStats === 'object') {
-                setStats((s) => ({
-                  ...s,
-                  totalPrayersOnTime: Math.max(s.totalPrayersOnTime, typeof dbStats.totalPrayersOnTime === 'number' ? dbStats.totalPrayersOnTime : 0),
-                  totalPrayersLate: Math.max(s.totalPrayersLate, typeof dbStats.totalPrayersLate === 'number' ? dbStats.totalPrayersLate : 0),
-                  totalPrayersMissed: Math.max(s.totalPrayersMissed, typeof dbStats.totalPrayersMissed === 'number' ? dbStats.totalPrayersMissed : 0),
-                  totalPagesRead: Math.max(s.totalPagesRead, typeof dbStats.totalPagesRead === 'number' ? dbStats.totalPagesRead : 0),
-                  personalCharity: Math.max(s.personalCharity, typeof dbStats.personalCharity === 'number' ? dbStats.personalCharity : 0),
-                }));
+                setStats((s) => {
+                  const next: typeof s = { ...s };
+                  if (typeof dbStats.streak === 'number' && dbStats.streak > next.streak) next.streak = dbStats.streak;
+                  if (typeof dbStats.totalPrayersOnTime === 'number') next.totalPrayersOnTime = Math.max(next.totalPrayersOnTime, dbStats.totalPrayersOnTime);
+                  if (typeof dbStats.totalPrayersLate === 'number') next.totalPrayersLate = Math.max(next.totalPrayersLate, dbStats.totalPrayersLate);
+                  if (typeof dbStats.totalPrayersMissed === 'number') next.totalPrayersMissed = Math.max(next.totalPrayersMissed, dbStats.totalPrayersMissed);
+                  if (typeof dbStats.totalPagesRead === 'number') next.totalPagesRead = Math.max(next.totalPagesRead, dbStats.totalPagesRead);
+                  if (typeof dbStats.pagesReadToday === 'number') next.pagesReadToday = Math.max(next.pagesReadToday, dbStats.pagesReadToday);
+                  if (typeof dbStats.personalCharity === 'number') next.personalCharity = Math.max(next.personalCharity, dbStats.personalCharity);
+                  if (dbStats.lastCompletedDate) next.lastCompletedDate = dbStats.lastCompletedDate || next.lastCompletedDate;
+                  return next;
+                });
               }
-            } catch {
-              // ignore daily progress fetch failures; local state remains
+            } catch (e) {
+              console.error('fetchDailyProgress session error:', e);
+            }
+            try {
+              const { fetchTasbeehForToday } = await import('@/lib/supabase');
+              if (fetchTasbeehForToday) {
+                const tCount = await fetchTasbeehForToday(sessionUser.id, todayKey());
+                if (typeof tCount === 'number' && tCount >= 0) {
+                  setTasbeeh({ date: todayKey(), count: tCount });
+                }
+              }
+            } catch (e) {
+              console.error('tasbeeh fetch error:', e);
             }
             try {
               const remoteFamily = await fetchFamilyByUserId(sessionUser.id);
@@ -360,9 +384,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (isCloudSync && profile.loggedIn) {
-      void upsertDailyProgress({ userId, date: todayKey(), stats });
+      void upsertDailyProgress({ userId, date: todayKey(), stats, tasbeehCount: tasbeeh.count });
     }
-  }, [stats, profile.loggedIn, isCloudSync, userId]);
+  }, [stats, tasbeeh.count, profile.loggedIn, isCloudSync, userId]);
 
   const signInEmail = useCallback(
     async (email: string, password: string, name?: string) => {
@@ -519,7 +543,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setFamily((f) => {
             if (!f) return f;
             const updatedMembers = f.members.map((m) => {
-              if (!isCurrentFamilyMember(m, userId, profile.displayName)) return m;
+              if (!isCurrentFamilyMember(m, userId, profile.displayName, isCloudSync)) return m;
               const delta = becameDone ? 1 : -1;
               return {
                 ...m,
@@ -531,7 +555,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             const next = { ...f, members: updatedMembers };
             if (isCloudSync) {
               for (const mm of updatedMembers) {
-                if (isCurrentFamilyMember(mm, userId, profile.displayName)) {
+                if (isCurrentFamilyMember(mm, userId, profile.displayName, isCloudSync)) {
                   void upsertMember(mm, f.id);
                 }
               }
@@ -564,14 +588,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setFamily((f) => {
       if (!f) return f;
       const updatedMembers = f.members.map((m) =>
-        isCurrentFamilyMember(m, userId, profile.displayName)
+        isCurrentFamilyMember(m, userId, profile.displayName, isCloudSync)
           ? { ...m, pagesToday: m.pagesToday + pages, totalPages: m.totalPages + pages, points: m.points + pages * 2 }
           : m
       );
       const next = { ...f, members: updatedMembers };
       if (isCloudSync) {
         for (const mm of updatedMembers) {
-          if (isCurrentFamilyMember(mm, userId, profile.displayName)) {
+          if (isCurrentFamilyMember(mm, userId, profile.displayName, isCloudSync)) {
             void upsertMember(mm, f.id);
           }
         }
@@ -673,41 +697,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const joinFamily = useCallback(
     async (code: string) => {
-      const localFg: FamilyGroup = {
-        id: `local-${code.toUpperCase()}-${generateUUID().slice(0, 6)}`,
-        name: `عائلة ${code.toUpperCase()}`,
-        code: code.toUpperCase(),
-        currency: 'ج.م',
-        members: [
-          { ...makeMember('ولي الأمر', true), points: 120, totalPrayers: 45, totalPages: 80 },
-          { ...makeMember(profile.displayName, false), id: userId, prayersToday: 0, pagesToday: 0, totalPrayers: stats.totalPrayersOnTime + stats.totalPrayersLate, totalPages: stats.totalPagesRead },
-          { ...makeMember('عضو آخر', false), points: 45, totalPrayers: 20, totalPages: 12 },
-        ],
-        treasury: 0,
-        rewards: [],
+      const currentMember: FamilyMember = {
+        ...makeMember(profile.displayName, false),
+        id: userId,
+        userId,
+        prayersToday: 0,
+        pagesToday: stats.pagesReadToday,
+        totalPrayers: stats.totalPrayersOnTime + stats.totalPrayersLate,
+        totalPages: stats.totalPagesRead,
       };
       if (isCloudSync) {
         try {
           const remote = await fetchFamilyByCode(code);
-          if (remote && remote.id && !remote.id.startsWith('local-')) {
+          if (remote && remote.id) {
             const safeRemoteMembers = Array.isArray(remote.members) ? remote.members : [];
             const safeRemoteRewards = Array.isArray(remote.rewards) ? remote.rewards : [];
-            const currentMember: FamilyMember = {
-              ...makeMember(profile.displayName, false),
-              id: userId,
-              userId,
-              prayersToday: 0,
-              pagesToday: stats.pagesReadToday,
-              totalPrayers: stats.totalPrayersOnTime + stats.totalPrayersLate,
-              totalPages: stats.totalPagesRead,
-            };
-            const alreadyExists = safeRemoteMembers.some((m) => m.userId === userId || m.id === userId || m.name === profile.displayName);
+            const alreadyExists = safeRemoteMembers.some((m) =>
+              (!!m.userId && !!userId && m.userId === userId) || m.id === userId
+            ) || safeRemoteMembers.some((m) => !m.userId && m.name === profile.displayName);
             const nextMembers = alreadyExists
-              ? safeRemoteMembers.map((m) =>
-                  m.userId === userId || m.id === userId || m.name === profile.displayName
-                    ? { ...m, pagesToday: currentMember.pagesToday, totalPrayers: currentMember.totalPrayers, totalPages: currentMember.totalPages, userId }
-                    : m
-                )
+              ? safeRemoteMembers.map((m) => {
+                  const isMe = (!!m.userId && !!userId && m.userId === userId)
+                    || m.id === userId
+                    || (!m.userId && m.name === profile.displayName);
+                  if (!isMe) return m;
+                  return {
+                    ...m,
+                    pagesToday: currentMember.pagesToday,
+                    totalPrayers: currentMember.totalPrayers,
+                    totalPages: currentMember.totalPages,
+                    userId: userId,
+                  };
+                })
               : [...safeRemoteMembers, currentMember];
             const finalFamily: FamilyGroup = {
               ...remote,
@@ -719,11 +740,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
               if (!alreadyExists) {
                 void upsertMember(currentMember, remote.id);
               } else {
-                const matching = nextMembers.find((m) => m.userId === userId || m.id === userId || m.name === profile.displayName);
+                const matching = nextMembers.find((m) =>
+                  (!!m.userId && !!userId && m.userId === userId) || m.id === userId
+                ) || nextMembers.find((m) => !m.userId && m.name === profile.displayName);
                 if (matching) void upsertMember(matching, remote.id);
               }
-            } catch {
-              // ignore member upsert
+            } catch (e) {
+              console.error('joinFamily member upsert error:', e);
             }
             try {
               const refreshedMembers = await fetchFamilyMembers(remote.id);
@@ -733,8 +756,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   return { ...cur, members: refreshedMembers };
                 });
               }
-            } catch {
-              // ignore members refresh
+            } catch (e) {
+              console.error('joinFamily members refresh error:', e);
             }
             try {
               const refreshedRewards = await fetchFamilyRewards(remote.id);
@@ -744,23 +767,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   return { ...cur, rewards: refreshedRewards };
                 });
               }
-            } catch {
-              // ignore rewards refresh
+            } catch (e) {
+              console.error('joinFamily rewards refresh error:', e);
             }
             return;
+          } else {
+            throw new Error('الرمز غير صحيح أو العائلة غير موجودة في السحابة.');
           }
-        } catch {
-          // fall through to local fallback
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'تعذر الوصول إلى السحابة.';
+          console.error('joinFamily cloud error:', msg, e);
+          if (msg.includes('الرمز غير صحيح')) {
+            throw e;
+          }
         }
       }
+      const localFg: FamilyGroup = {
+        id: `local-${code.toUpperCase()}-${generateUUID().slice(0, 6)}`,
+        name: `عائلة ${code.toUpperCase()}`,
+        code: code.toUpperCase(),
+        currency: 'ج.م',
+        members: [currentMember],
+        treasury: 0,
+        rewards: [],
+      };
       setFamily(localFg);
       if (isCloudSync) {
         try {
           void insertFamily(localFg).then((ok) => {
             if (ok) void syncFamilyMembers(localFg);
           });
-        } catch {
-          // ignore cloud insert failure; local works
+        } catch (e) {
+          console.error('joinFamily local->cloud insert error:', e);
         }
       }
     },
@@ -854,6 +892,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [isCloudSync]
   );
 
+  const refreshFamily = useCallback(async () => {
+    if (!isCloudSync || !family?.id) return;
+    try {
+      const [newMembers, newRewards] = await Promise.all([
+        fetchFamilyMembers(family.id).catch(() => []),
+        fetchFamilyRewards(family.id).catch(() => []),
+      ]);
+      setFamily((cur) => {
+        if (!cur) return cur;
+        return {
+          ...cur,
+          members: Array.isArray(newMembers) && newMembers.length > 0 ? newMembers : cur.members,
+          rewards: Array.isArray(newRewards) ? newRewards : cur.rewards,
+        };
+      });
+    } catch (e) {
+      console.error('refreshFamily error:', e);
+    }
+  }, [isCloudSync, family?.id]);
+
+  const isCurrentMember = useCallback(
+    (m: Partial<FamilyMember>) => isCurrentFamilyMember(m as FamilyMember, userId, profile.displayName, isCloudSync),
+    [userId, profile.displayName, isCloudSync]
+  );
+
   const value = useMemo<AppContextValue>(
     () => ({
       settings,
@@ -894,6 +957,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       removeFamilyReward,
       redeemFamilyReward,
       updateMemberStat,
+      refreshFamily,
+      isCurrentMember,
       prayers,
       setPrayers,
       location,
@@ -907,8 +972,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       signInGoogle, signOut, userId, authenticated, authLoading, tracking, setPrayerStatus,
       tasbeeh, incrementTasbeeh, resetTasbeeh, stats, addCharity, addQuranPages, soloRewards, addSoloReward, removeSoloReward, redeemSoloReward, khatmas, addKhatma,
       updateKhatmaPage, removeKhatma, family, createFamily, joinFamily, leaveFamily,
-      addFamilyDonation, addFamilyReward, removeFamilyReward, redeemFamilyReward, updateMemberStat, prayers,
-      location, reDetectLocation, detecting, isCloudSync,
+      addFamilyDonation, addFamilyReward, removeFamilyReward, redeemFamilyReward, updateMemberStat,
+      refreshFamily, isCurrentMember,
+      prayers, location, reDetectLocation, detecting, isCloudSync,
     ]
   );
 
@@ -924,7 +990,7 @@ function emptyTracking(): PrayerTracking {
 function yesterdayKey(): string {
   const d = new Date();
   d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
+  return localDateKey(d);
 }
 
 export function useApp(): AppContextValue {

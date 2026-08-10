@@ -347,7 +347,7 @@ function RewardRow({
   memberCount?: number;
   onRedeemMember?: (memberId: string) => void;
 }) {
-  const { family, profile } = useApp();
+  const { family, isCurrentMember } = useApp();
   const [showMembers, setShowMembers] = useState(false);
   const members = Array.isArray(family?.members) ? family.members : [];
   return (
@@ -408,7 +408,7 @@ function RewardRow({
           </p>
           <div className="space-y-2">
             {members.map((m) => {
-              const isCurrent = m.name === profile.displayName;
+              const isCurrent = isCurrentMember(m);
               return (
                 <button
                   key={m.id}
@@ -564,7 +564,7 @@ function MemberProgressCard({
 }
 
 function FamilyMode() {
-  const { family: rawFamily, profile, createFamily, joinFamily, leaveFamily, addFamilyDonation, addFamilyReward, removeFamilyReward, redeemFamilyReward, isCloudSync } = useApp();
+  const { family: rawFamily, profile, userId, createFamily, joinFamily, leaveFamily, addFamilyDonation, addFamilyReward, removeFamilyReward, redeemFamilyReward, isCloudSync, refreshFamily: ctxRefreshFamily, isCurrentMember } = useApp();
   const family = rawFamily && typeof rawFamily === 'object' ? rawFamily : null;
   const members = Array.isArray(family?.members) ? family.members : [];
   const rewards = Array.isArray(family?.rewards) ? family.rewards : [];
@@ -610,12 +610,18 @@ function FamilyMode() {
   }, [family, members]);
 
   const headMember = useMemo(() => members.find((m) => m.isHead), [members]);
-  const isAdmin = !!headMember && !!family && (headMember.name === profile.displayName || headMember.id === members.find((m) => m.name === profile.displayName)?.id);
+  const isAdmin = !!headMember && !!family && (
+    (!!headMember.userId && headMember.userId === userId) ||
+    headMember.id === userId ||
+    (!headMember.userId && headMember.name === profile.displayName)
+  );
   const currentUserMemberId = useMemo(() => {
     if (!family) return null;
-    const m = members.find((mm) => mm.name === profile.displayName);
+    const m = members.find((mm) =>
+      (!!mm.userId && mm.userId === userId) || mm.id === userId
+    ) || members.find((mm) => mm.name === profile.displayName);
     return m?.id ?? null;
-  }, [family, members, profile.displayName]);
+  }, [family, members, userId, profile.displayName]);
 
   const handleAddReward = () => {
     if (!rewardTitle.trim()) return;
@@ -739,21 +745,9 @@ function FamilyMode() {
     if (!isCloudSync || !family?.id) return;
     setRefreshing(true);
     try {
-      const { fetchFamilyMembers: ffMembers, fetchFamilyRewards: ffRewards } = await import('@/lib/supabase');
-      const [newMembers, newRewards] = await Promise.all([
-        ffMembers(family.id).catch(() => []),
-        ffRewards(family.id).catch(() => []),
-      ]);
-      setFamily((cur) => {
-        if (!cur) return cur;
-        return {
-          ...cur,
-          members: Array.isArray(newMembers) && newMembers.length ? newMembers : cur.members,
-          rewards: Array.isArray(newRewards) ? newRewards : cur.rewards,
-        };
-      });
-    } catch {
-      // ignore refresh errors
+      await ctxRefreshFamily();
+    } catch (e) {
+      console.error('refreshFamily UI error:', e);
     } finally {
       setTimeout(() => setRefreshing(false), 600);
     }
@@ -886,7 +880,7 @@ function FamilyMode() {
             <MemberProgressCard
               key={m.id}
               member={m as any}
-              isCurrent={m.name === profile.displayName}
+              isCurrent={isCurrentMember(m)}
             />
           ))}
         </div>
@@ -912,7 +906,7 @@ function FamilyMode() {
                 <p className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1">
                   {m.name}
                   {m.isHead && <Crown size={14} className="text-gold" />}
-                  {m.name === profile.displayName && <span className="text-xs text-emerald dark:text-gold-light">(أنت)</span>}
+                  {isCurrentMember(m) && <span className="text-xs text-emerald dark:text-gold-light">(أنت)</span>}
                 </p>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400">
                   <CalendarCheck size={10} className="inline mx-0.5" /> {m.prayersToday}/5 ·

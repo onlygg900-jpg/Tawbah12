@@ -37,21 +37,33 @@ export default function AIAssistant() {
     setLoading(true);
 
     try {
+      const nextMessages = [...messages, userMsg].map((m) => ({ role: m.role, content: m.content }));
       const { data, error } = await supabase.functions.invoke('ai-assistant', {
-        body: JSON.stringify({
-          messages: [...messages, userMsg].map((m) => ({ role: m.role, content: m.content })),
-        }),
+        body: { messages: nextMessages },
+        headers: {
+          'Accept': 'application/json',
+        },
       });
 
-      if (error) throw new Error(String(error));
-      if (data?.error) throw new Error(data.error);
+      if (error) {
+        console.error('AI invoke error:', error);
+        throw new Error(String(error.message || error.context || error));
+      }
+      if (data?.error) {
+        console.error('AI response error:', data.error);
+        throw new Error(data.error);
+      }
 
       const reply = typeof data?.reply === 'string' ? data.reply : 'عذراً، لم أتمكن من توليد رد.';
       setMessages((m) => [...m, { role: 'assistant', content: reply }]);
-    } catch {
+    } catch (e) {
+      console.error('AI assistant exception:', e);
+      const msg = e instanceof Error && e.message && !e.message.includes('Unexpected')
+        ? `عذراً، حدث خطأ: ${e.message}`
+        : 'عذراً، تعذّر الاتصال بالمساعد الذكي. تحقق من المفتاح أو حاول مرة أخرى.';
       setMessages((m) => [
         ...m,
-        { role: 'assistant', content: 'عذراً، تعذّر الاتصال بالمساعد. حاول مرة أخرى.' },
+        { role: 'assistant', content: msg },
       ]);
     } finally {
       setLoading(false);
