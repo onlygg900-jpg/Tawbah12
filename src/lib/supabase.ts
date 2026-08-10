@@ -584,28 +584,30 @@ export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
     try {
       const sessionUser = await fetchCurrentSession();
       if (sessionUser) famRow.created_by = sessionUser.id;
-    } catch {
-      // ignore session fetch
+    } catch (e) {
+      console.warn('insertFamily: no session user for created_by:', e);
     }
     const { error: e1 } = await supabase.from('families').upsert(famRow, { onConflict: 'id' });
     if (e1) {
-      console.error('insertFamily error:', e1.message);
+      console.error('insertFamily families.upsert error:', e1.message, 'code:', e1.code, 'details:', e1.details);
       return false;
     }
     if (Array.isArray(fg.members) && fg.members.length) {
       for (const m of fg.members) {
         const mUserId = m.userId || m.id;
-        if (!mUserId || !isUuid(mUserId)) continue;
-        try {
-          await supabase.from('profiles').upsert({
+        if (!mUserId || !isUuid(mUserId)) {
+          console.warn('insertFamily: skip member (invalid uuid):', mUserId, m.name);
+          continue;
+        }
+        {
+          const { error: pe } = await supabase.from('profiles').upsert({
             id: mUserId,
             display_name: m.name || 'عضو',
           }, { onConflict: 'id' });
-        } catch {
-          // ignore profile upsert
+          if (pe) console.warn('insertFamily profile upsert warn:', pe.message);
         }
-        try {
-          await supabase.from('family_members').upsert({
+        {
+          const { error: me } = await supabase.from('family_members').upsert({
             family_id: famRow.id,
             user_id: mUserId,
             display_name: m.name || 'عضو',
@@ -616,8 +618,7 @@ export async function insertFamily(fg: FamilyGroup): Promise<boolean> {
             pages_today: typeof m.pagesToday === 'number' ? m.pagesToday : 0,
             total_pages: typeof m.totalPages === 'number' ? m.totalPages : 0,
           }, { onConflict: 'user_id' });
-        } catch {
-          // ignore member upsert
+          if (me) console.error('insertFamily family_members upsert error:', me.message, 'code:', me.code, 'details:', me.details);
         }
       }
     }
@@ -649,20 +650,20 @@ export async function updateFamilyTreasury(familyId: string, balance: number): P
 }
 
 export async function upsertMember(member: FamilyMember, familyId: string): Promise<boolean> {
-  return safeQuery(async () => {
+  if (!available || !supabase || !familyId || !isUuid(familyId)) return false;
+  try {
     const userId = member.userId || member.id;
     if (!userId) return false;
 
-    try {
-      await supabase!.from('profiles').upsert({
+    {
+      const { error: pe } = await supabase.from('profiles').upsert({
         id: userId,
         display_name: member.name,
       }, { onConflict: 'id' });
-    } catch {
-      // ignore profile upsert
+      if (pe) console.warn('upsertMember profile upsert warn:', pe.message);
     }
 
-    const { error } = await supabase!.from('family_members').upsert({
+    const { error } = await supabase.from('family_members').upsert({
       id: member.id || undefined,
       family_id: familyId,
       user_id: userId,
@@ -674,8 +675,15 @@ export async function upsertMember(member: FamilyMember, familyId: string): Prom
       pages_today: typeof member.pagesToday === 'number' ? member.pagesToday : 0,
       total_pages: typeof member.totalPages === 'number' ? member.totalPages : 0,
     }, { onConflict: 'user_id' });
-    return !error;
-  }, false);
+    if (error) {
+      console.error('upsertMember family_members upsert error:', error.message, 'code:', error.code, 'details:', error.details);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('upsertMember exception:', err);
+    return false;
+  }
 }
 
 export async function insertReward(reward: Reward, familyId: string): Promise<boolean> {

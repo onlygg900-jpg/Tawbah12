@@ -35,20 +35,31 @@ const SYSTEM_PROMPT = `أنت "توبة"، مساعد ذكي إسلامي ودو
 // ============================================================================
 // HELPERS
 // ============================================================================
-function jsonResponse(body: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
+
+/** Always return HTTP 200 with JSON body so supabase.functions.invoke()
+ *  does NOT throw generic "non-2xx status code". Frontend checks both
+ *  `error` (functions error) and `data?.error` (embedded JSON error).  */
+function jsonResponse(body: unknown, _status = 200, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
-    status,
+    status: 200,
     headers: { ...CORS_HEADERS, ...extraHeaders },
   });
 }
 
-function isAuthValid(req: Request, supabaseUrl: string | undefined): boolean {
-  // Either an Authorization: Bearer <jwt> header OR the Supabase anon key in Apikey header.
+/** Lightweight auth check. Since we deploy with --no-verify-jwt, we only
+ *  verify that the caller passes SOME form of supabase-originated header
+ *  (anon key or bearer token) — the platform itself already gates access. */
+function isAuthPlausible(req: Request): boolean {
   const authHeader = req.headers.get("Authorization") ?? "";
   const apiKeyHeader = req.headers.get("Apikey") ?? "";
   if (authHeader.toLowerCase().startsWith("bearer ")) return true;
-  if (apiKeyHeader && supabaseUrl && apiKeyHeader.length > 8) return true;
-  // Allow localhost/anonymous during dev: if no env keys set, treat as valid.
+  if (apiKeyHeader && apiKeyHeader.length > 8) return true;
+  // When running completely locally / with no env configured at all, allow.
+  const allEmpty =
+    !Deno.env.get("SUPABASE_URL") &&
+    !Deno.env.get("SUPABASE_ANON_KEY") &&
+    !Deno.env.get("GEMINI_API_KEY");
+  if (allEmpty) return true;
   return false;
 }
 
@@ -72,8 +83,6 @@ function buildGeminiContents(messages: ChatMessage[]): GeminiContent[] {
     if (!m || typeof m.content !== "string" || !m.content.trim()) continue;
     const role: "user" | "model" =
       m.role === "assistant" || m.role === "model" ? "model" : "user";
-    // Avoid empty contents, and avoid two same-role consecutive entries by
-    // appending to previous part if same role.
     const last = contents[contents.length - 1];
     if (last && last.role === role) {
       last.parts.push({ text: "\n" + m.content.trim() });
@@ -81,7 +90,6 @@ function buildGeminiContents(messages: ChatMessage[]): GeminiContent[] {
       contents.push({ role, parts: [{ text: m.content.trim() }] });
     }
   }
-  // Must end with a user turn.
   if (contents.length === 0 || contents[contents.length - 1].role !== "user") {
     contents.push({ role: "user", parts: [{ text: "السلام عليكم" }] });
   }
@@ -91,182 +99,204 @@ function buildGeminiContents(messages: ChatMessage[]): GeminiContent[] {
 // ============================================================================
 // MAIN
 // ============================================================================
+
+// Boot-time diagnostics (visible in edge function logs only; no secrets echoed)
+console.log("[ai-assistant] boot");
+console.log("[ai-assistant] SUPABASE_URL set:", !!Deno.env.get("SUPABASE_URL"));
+console.log("[ai-assistant] SUPABASE_ANON_KEY set:", !!Deno.env.get("SUPABASE_ANON_KEY"));
+const rawGem = Deno.env.get("GEMINI_API_KEY");
+console.log(
+  "[ai-assistant] GEMINI_API_KEY set:",
+  !!rawGem,
+  "- length:",
+  rawGem ? rawGem.length : 0,
+  "- looks placeholder:",
+  rawGem ? rawGem.includes("your-key") || rawGem.length < 10 : "N/A",
+);
+
 Deno.serve(async (req: Request) => {
-  // --- 1. CORS preflight FIRST --------------------------------------------
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: CORS_HEADERS });
-  }
-
-  // --- 2. Method validation -----------------------------------------------
-  if (req.method !== "POST") {
-    return jsonResponse(
-      { error: `الطلب غير مدعوم: ${req.method}. استخدم POST.` },
-      405,
-    );
-  }
-
-  // --- 3. Auth ------------------------------------------------------------
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
-  const jwtSecret = Deno.env.get("SUPABASE_JWT_SECRET");
-  void jwtSecret;
-
-  // Validate request auth (unless running fully local without keys at all).
-  const hasAnyKey = !!(Deno.env.get("GEMINI_API_KEY") || supabaseUrl || anonKey);
-  if (hasAnyKey && !isAuthValid(req, supabaseUrl)) {
-    return jsonResponse(
-      { error: "غير مصرح: الرجاء تسجيل الدخول لاستخدام المساعد." },
-      401,
-    );
-  }
-
-  // --- 4. Parse body ------------------------------------------------------
-  let messages: ChatMessage[] = [];
   try {
-    const contentType = req.headers.get("content-type") ?? "";
-    if (!contentType.includes("application/json")) {
+    // --- 1. CORS preflight FIRST ------------------------------------------
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
+    // --- 2. Method validation ---------------------------------------------
+    if (req.method !== "POST") {
       return jsonResponse(
-        { error: "الرجاء إرسال الطلب بصيغة JSON." },
+        { error: `الطلب غير مدعوم: ${req.method}. استخدم POST.` },
+        405,
+      );
+    }
+
+    // --- 3. Lightweight auth ----------------------------------------------
+    // (We deploy with --no-verify-jwt; platform already gates invocations.)
+    if (!isAuthPlausible(req)) {
+      console.warn("[ai-assistant] implausible auth; headers:", Object.fromEntries(req.headers));
+      return jsonResponse(
+        { error: "غير مصرح: الرجاء تسجيل الدخول لاستخدام المساعد." },
+        401,
+      );
+    }
+
+    // --- 4. Parse body ----------------------------------------------------
+    let messages: ChatMessage[] = [];
+    try {
+      const contentType = req.headers.get("content-type") ?? "";
+      if (!contentType.includes("application/json")) {
+        return jsonResponse(
+          { error: "الرجاء إرسال الطلب بصيغة JSON." },
+          400,
+        );
+      }
+      const body = await req.json();
+      if (!body || !Array.isArray(body.messages)) {
+        return jsonResponse(
+          { error: "الطلب يجب أن يحتوي حقل messages كمصفوفة." },
+          400,
+        );
+      }
+      messages = body.messages as ChatMessage[];
+      if (messages.length === 0) {
+        return jsonResponse(
+          { error: "لا توجد رسائل. الرجاء إرسال سؤال على الأقل." },
+          400,
+        );
+      }
+    } catch (err) {
+      console.error("[ai-assistant] JSON parse error:", err);
+      return jsonResponse(
+        { error: "هيكل الطلب غير صالح (JSON غير صحيح)." },
         400,
       );
     }
-    const body = await req.json();
-    if (!body || !Array.isArray(body.messages)) {
+
+    // --- 5. Gemini key ----------------------------------------------------
+    const geminiKey = Deno.env.get("GEMINI_API_KEY");
+    if (!geminiKey || geminiKey.includes("your-key") || geminiKey.length < 10) {
+      console.error("[ai-assistant] GEMINI_API_KEY missing or looks like placeholder");
       return jsonResponse(
-        { error: "الطلب يجب أن يحتوي حقل messages كمصفوفة." },
-        400,
+        { error: "لم يتم إعداد المساعد الذكي بعد (مفتاح Gemini مفقود في Secrets)." },
+        500,
       );
     }
-    messages = body.messages as ChatMessage[];
-    if (messages.length === 0) {
-      return jsonResponse(
-        { error: "لا توجد رسائل. الرجاء إرسال سؤال على الأقل." },
-        400,
-      );
-    }
-  } catch (err) {
-    console.error("JSON parse error:", err);
-    return jsonResponse(
-      { error: "هيكل الطلب غير صالح (JSON غير صحيح)." },
-      400,
-    );
-  }
 
-  // --- 5. Gemini key ------------------------------------------------------
-  const geminiKey = Deno.env.get("GEMINI_API_KEY");
-  if (!geminiKey || geminiKey.includes("your-key") || geminiKey.length < 10) {
-    return jsonResponse(
-      { error: "لم يتم إعداد المساعد الذكي بعد (مفتاح Gemini مفقود)." },
-      500,
-    );
-  }
-
-  // --- 6. Build Gemini payload --------------------------------------------
-  const contents = buildGeminiContents(messages);
-  const geminiBody = {
-    contents,
-    systemInstruction: {
-      role: "system" as const,
-      parts: [{ text: SYSTEM_PROMPT }],
-    },
-    generationConfig: {
-      temperature: 0.6,
-      topP: 0.95,
-      topK: 40,
-      maxOutputTokens: 1024,
-      responseMimeType: "text/plain",
-    },
-    safetySettings: [
-      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_LOW_AND_ABOVE" },
-      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_LOW_AND_ABOVE" },
-      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_LOW_AND_ABOVE" },
-      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
-    ],
-  };
-
-  // --- 7. Call Gemini with timeout ----------------------------------------
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 25_000);
-
-    const res = await fetch(`${GEMINI_API_URL}?key=${geminiKey}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        "Accept": "application/json",
-        "x-goog-api-client": "tawbah-edge/1.0",
+    // --- 6. Build Gemini payload ------------------------------------------
+    const contents = buildGeminiContents(messages);
+    const geminiBody = {
+      contents,
+      systemInstruction: {
+        role: "system" as const,
+        parts: [{ text: SYSTEM_PROMPT }],
       },
-      body: JSON.stringify(geminiBody),
-      signal: controller.signal,
-    });
+      generationConfig: {
+        temperature: 0.6,
+        topP: 0.95,
+        topK: 40,
+        maxOutputTokens: 1024,
+        responseMimeType: "text/plain",
+      },
+      safetySettings: [
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_LOW_AND_ABOVE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_LOW_AND_ABOVE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+      ],
+    };
 
-    clearTimeout(timeoutId);
+    // --- 7. Call Gemini with timeout --------------------------------------
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 25_000);
 
-    if (!res.ok) {
-      let errText = "";
-      try {
-        errText = await res.text();
-      } catch { /* ignore */ }
-      console.error(`Gemini HTTP ${res.status}:`, errText.slice(0, 500));
+      const res = await fetch(`${GEMINI_API_URL}?key=${geminiKey}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Accept": "application/json",
+          "x-goog-api-client": "tawbah-edge/1.0",
+        },
+        body: JSON.stringify(geminiBody),
+        signal: controller.signal,
+      });
 
-      if (res.status === 401 || res.status === 403) {
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        let errText = "";
+        try {
+          errText = await res.text();
+        } catch { /* ignore */ }
+        console.error(`[ai-assistant] Gemini HTTP ${res.status}:`, errText.slice(0, 500));
+
+        if (res.status === 401 || res.status === 403) {
+          return jsonResponse(
+            { error: "خطأ في إعدادات المساعد (مفتاح Gemini غير صالح أو مقيد)." },
+            502,
+          );
+        }
+        if (res.status === 429) {
+          return jsonResponse(
+            { error: "الكثير من الطلبات حالياً. الرجاء المحاولة بعد لحظات." },
+            503,
+          );
+        }
+        if (res.status >= 500) {
+          return jsonResponse(
+            { error: "خادم المساعد الذكي غير متاح حالياً. حاول لاحقاً." },
+            502,
+          );
+        }
         return jsonResponse(
-          { error: "خطأ في إعدادات المساعد (مفتاح Gemini غير صالح)." },
+          { error: `تعذّر الحصول على رد من المساعد: (${res.status})` },
           502,
         );
       }
-      if (res.status === 429) {
+
+      // --- 8. Parse Gemini response ---------------------------------------
+      const data = await res.json();
+      const rawText: string | undefined =
+        data?.candidates?.[0]?.content?.parts?.[0]?.text ??
+        data?.candidates?.[0]?.output;
+
+      const finishReason: string | undefined = data?.candidates?.[0]?.finishReason;
+      const safetyRatings = data?.candidates?.[0]?.safetyRatings;
+      void safetyRatings;
+
+      if (!rawText || typeof rawText !== "string" || !rawText.trim()) {
+        if (finishReason && finishReason !== "STOP") {
+          console.warn("[ai-assistant] Gemini finishReason =", finishReason);
+          return jsonResponse(
+            { reply: "عذراً، لم أتمكن من توليد رد مناسب لهذا السؤال. جرّب صياغة أخرى." },
+            200,
+          );
+        }
         return jsonResponse(
-          { error: "الكثير من الطلبات حالياً. الرجاء المحاولة بعد لحظات." },
-          503,
-        );
-      }
-      if (res.status >= 500) {
-        return jsonResponse(
-          { error: "خادم المساعد الذكي غير متاح حالياً. حاول لاحقاً." },
+          { error: "لم يتم استلام رد نصي من المساعد الذكي." },
           502,
         );
       }
-      return jsonResponse(
-        { error: `تعذّر الحصول على رد: (${res.status})` },
-        502,
-      );
-    }
 
-    // --- 8. Parse Gemini response -----------------------------------------
-    const data = await res.json();
-    const rawText: string | undefined =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text ??
-      data?.candidates?.[0]?.output;
-
-    const finishReason: string | undefined = data?.candidates?.[0]?.finishReason;
-    const safetyRatings = data?.candidates?.[0]?.safetyRatings;
-    void safetyRatings;
-
-    if (!rawText || typeof rawText !== "string" || !rawText.trim()) {
-      if (finishReason && finishReason !== "STOP") {
+      return jsonResponse({ reply: rawText.trim() }, 200);
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
         return jsonResponse(
-          { reply: "عذراً، لم أتمكن من توليد رد مناسب لهذا السؤال. جرّب صياغة أخرى." },
-          200,
+          { error: "انتهت مهلة الطلب. الرجاء المحاولة مرة أخرى." },
+          504,
         );
       }
+      console.error("[ai-assistant] Gemini fetch/call error:", err);
       return jsonResponse(
-        { error: "لم يتم استلام رد نصي من المساعد الذكي." },
-        502,
+        { error: "حدث خطأ غير متوقع أثناء الاتصال بالمساعد الذكي." },
+        500,
       );
     }
-
-    return jsonResponse({ reply: rawText.trim() }, 200);
-  } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
-      return jsonResponse(
-        { error: "انتهت مهلة الطلب. الرجاء المحاولة مرة أخرى." },
-        504,
-      );
-    }
-    console.error("Edge function call error:", err);
+  } catch (outer) {
+    // Final safety net: NEVER let an unhandled exception bubble into a 500
+    // from deno/supabase, because that becomes "non-2xx status code".
+    console.error("[ai-assistant] UNHANDLED outer error:", outer);
     return jsonResponse(
-      { error: "حدث خطأ غير متوقع أثناء الاتصال بالمساعد الذكي." },
+      { error: "حدث خطأ داخلي في المساعد الذكي. الرجاء المحاولة لاحقاً." },
       500,
     );
   }
