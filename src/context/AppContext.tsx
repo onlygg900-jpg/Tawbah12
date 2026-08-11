@@ -19,7 +19,7 @@ import type {
   Reward,
 } from '@/types';
 import { loadState, saveState, todayKey, localDateKey } from '@/services/storage';
-import { defaultNotificationSettings } from '@/services/notificationService';
+import { defaultNotificationSettings, schedulePeriodicDhikr } from '@/services/notificationService';
 import { PRAYER_KEYS, detectLocation, type LocationCoords } from '@/services/prayerService';
 import { schedulePrayerChecks } from '@/services/notificationService';
 import {
@@ -100,9 +100,9 @@ interface AppContextValue {
 }
 
 const defaultSettings: AppSettings = {
-  theme: 'dark',
-  city: 'مكة',
-  country: 'السعودية',
+  theme: 'light',
+  city: 'القاهرة',
+  country: 'مصر',
   calcMethod: 4,
   notifications: defaultNotificationSettings(),
   contentBlocker: { enabled: false, provider: 'none', adminLocked: false, adminPin: null, nativeVpnEnabled: false, nativeVpnProvider: 'none' },
@@ -240,6 +240,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const cleanup = schedulePrayerChecks(() => prayers, true);
     return cleanup;
   }, [settings.notifications.enabled, settings.notifications.prayerReminders, prayers]);
+
+  useEffect(() => {
+    if (!settings.notifications.enabled || !settings.notifications.morningAdhkar) return;
+    const cleanup = schedulePeriodicDhikr(true, 10, 15);
+    return cleanup;
+  }, [settings.notifications.enabled, settings.notifications.morningAdhkar]);
 
   const [userId, setUserIdState] = useState<string>(() => {
     const key = 'tawbah:userid';
@@ -465,7 +471,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const toggleTheme = useCallback(() => {
-    setSettings((s) => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }));
+    setSettings((s) => ({ ...s, theme: s.theme === 'light' ? 'light' : 'dark' }));
   }, []);
 
   const updateProfile = useCallback((patch: Partial<UserProfile>) => {

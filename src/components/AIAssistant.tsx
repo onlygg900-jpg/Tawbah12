@@ -70,6 +70,14 @@ function genTitleFromFirstMessage(text: string): string {
   return clean.slice(0, 28).trimEnd() + '…';
 }
 
+function toIso(v: unknown): string {
+  if (typeof v === 'string' && v.length > 0) return v;
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    try { return new Date(v).toISOString(); } catch { /* fallthrough */ }
+  }
+  return new Date().toISOString();
+}
+
 function loadSessions(): ChatSession[] {
   const result = loadState<ChatSession[]>(STORAGE_KEY, []);
   let list: any[] = result;
@@ -78,11 +86,13 @@ function loadSessions(): ChatSession[] {
   }
   if (!Array.isArray(list)) return [];
   const safe: ChatSession[] = [];
+  let needsNormalize = false;
   for (const item of list) {
-    if (!item || typeof item !== 'object') continue;
-    if (typeof item.id !== 'string') continue;
-    if (typeof item.title !== 'string') continue;
-    if (!Array.isArray(item.messages)) continue;
+    if (!item || typeof item !== 'object') { needsNormalize = true; continue; }
+    if (typeof item.id !== 'string') { needsNormalize = true; continue; }
+    if (typeof item.title !== 'string') { needsNormalize = true; continue; }
+    if (!Array.isArray(item.messages)) { needsNormalize = true; continue; }
+    if (typeof item.createdAt !== 'string' || typeof item.updatedAt !== 'string') needsNormalize = true;
     const msgs: ChatMessage[] = [];
     for (const m of item.messages) {
       if (
@@ -98,11 +108,11 @@ function loadSessions(): ChatSession[] {
       id: item.id,
       title: item.title,
       messages: msgs,
-      createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
-      updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : Date.now(),
+      createdAt: toIso(item.createdAt),
+      updatedAt: toIso(item.updatedAt),
     });
   }
-  if (safe.length !== list.length || !Array.isArray(result)) {
+  if (needsNormalize || safe.length !== list.length || !Array.isArray(result)) {
     saveState<ChatSession[]>(STORAGE_KEY, safe);
   }
   return safe;
@@ -369,7 +379,11 @@ export default function AIAssistant() {
     }
   }, [loading, activeId, activeSession, createNewSession, upsertSessionMessages]);
 
-  const sortedSessions = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const sortedSessions = [...sessions].sort((a, b) => {
+    const ta = Date.parse(typeof a.updatedAt === 'string' ? a.updatedAt : new Date(Number(a.updatedAt) || Date.now()).toISOString());
+    const tb = Date.parse(typeof b.updatedAt === 'string' ? b.updatedAt : new Date(Number(b.updatedAt) || Date.now()).toISOString());
+    return Number.isFinite(tb) && Number.isFinite(ta) ? tb - ta : 0;
+  });
 
   return (
     <div className="flex h-[calc(100vh-56px)] lg:h-screen overflow-hidden" dir="rtl">

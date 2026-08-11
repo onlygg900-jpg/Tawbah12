@@ -150,3 +150,18 @@ export function timeUntil(time: string): { hours: number; minutes: number; label
   const label = hours > 0 ? `${hours} ساعة و ${minutes} دقيقة` : `${minutes} دقيقة`;
   return { hours, minutes, label };
 }
+
+export function to12HourFormat(time24: string): { time: string; period: string; periodAr: string } {
+  const [hStr, mStr] = time24.split(':');
+  let h = parseInt(hStr, 10);
+  const m = mStr;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const periodAr = h >= 12 ? 'م' : 'ص';
+  h = h % 12;
+  if (h === 0) h = 12;
+  return {
+    time: `${h}:${m}`,
+    period,
+    periodAr,
+  };
+}

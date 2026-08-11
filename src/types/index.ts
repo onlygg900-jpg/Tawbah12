@@ -139,7 +139,7 @@ export interface HadithDhikr {
   type: 'hadith' | 'dhikr';
 }
 
-export type ViewKey = 'home' | 'quran' | 'assistant' | 'challenges' | 'settings';
+export type ViewKey = 'home' | 'quran' | 'assistant' | 'challenges' | 'settings' | 'qibla' | 'prayers' | 'tasbeeh' | 'adhkar';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';

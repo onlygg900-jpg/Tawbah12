@@ -15,37 +15,92 @@ export function notificationSupported(): boolean {
   return typeof window !== 'undefined' && 'Notification' in window;
 }
 
-export function showNotification(title: string, body: string): void {
+export function showNotification(title: string, body: string, tag?: string): void {
   if (!notificationSupported() || Notification.permission !== 'granted') return;
   try {
     new Notification(title, {
       body,
       icon: '/icon.svg',
       badge: '/icon.svg',
-      tag: 'tawbah-' + Date.now(),
+      tag: tag || 'tawbah-' + Date.now(),
     });
   } catch {
     // ignore
   }
 }
 
-export function notifyPrayer(prayerName: string): void {
-  const d = getRandomDhikr();
-  showNotification(`حان وقت صلاة ${prayerName}`, `${d.text}\n— ${d.source}`);
+let audioCtx: AudioContext | null = null;
+function beep(duration = 200, freq = 800, vol = 0.3): void {
+  try {
+    if (!audioCtx) {
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      audioCtx = new Ctx();
+    }
+    const ctx = audioCtx!;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.value = vol;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    setTimeout(() => {
+      osc.stop();
+    }, duration);
+  } catch {
+    // ignore audio errors
+  }
 }
 
-export function notifyDhikr(category: 'morning' | 'evening' | 'afterPrayer' | 'daily'): void {
+export function playAdhanSound(): void {
+  const pattern = [
+    { d: 400, f: 523 },
+    { d: 300, f: 0 },
+    { d: 400, f: 659 },
+    { d: 300, f: 0 },
+    { d: 600, f: 784 },
+    { d: 500, f: 0 },
+    { d: 400, f: 659 },
+    { d: 300, f: 0 },
+    { d: 400, f: 523 },
+    { d: 300, f: 0 },
+    { d: 600, f: 587 },
+  ];
+  let delay = 0;
+  for (const note of pattern) {
+    setTimeout(() => {
+      if (note.f > 0) beep(note.d, note.f, 0.25);
+    }, delay);
+    delay += note.d + 80;
+  }
+}
+
+export function notifyPrayer(prayerName: string): void {
+  playAdhanSound();
+  const d = getRandomDhikr();
+  showNotification(
+    `🕌 حان وقت صلاة ${prayerName}`,
+    `قم بالصلاة في وقتها للحصول على الأجر الكامل\n\n${d.text}\n— ${d.source}`,
+    `prayer-${prayerName}-${Date.now()}`
+  );
+}
+
+export function notifyDhikr(category: 'morning' | 'evening' | 'afterPrayer' | 'daily' | 'periodic'): void {
   const map = {
-    morning: { title: 'أذكار الصباح', fn: () => import('./dhikrService').then((m) => m.getMorningDhikr()) },
-    evening: { title: 'أذكار المساء', fn: () => import('./dhikrService').then((m) => m.getEveningDhikr()) },
-    afterPrayer: { title: 'أذكار بعد الصلاة', fn: () => import('./dhikrService').then((m) => m.getAfterPrayerDhikr()) },
-    daily: { title: 'حديث اليوم', fn: () => import('./dhikrService').then((m) => m.getDailyHadith()) },
+    morning: { title: '🌅 أذكار الصباح', fn: () => import('./dhikrService').then((m) => m.getMorningDhikr()) },
+    evening: { title: '🌆 أذكار المساء', fn: () => import('./dhikrService').then((m) => m.getEveningDhikr()) },
+    afterPrayer: { title: '🤲 أذكار بعد الصلاة', fn: () => import('./dhikrService').then((m) => m.getAfterPrayerDhikr()) },
+    daily: { title: '✨ حديث اليوم', fn: () => import('./dhikrService').then((m) => m.getDailyHadith()) },
+    periodic: { title: '💭 تذكير بالذكر', fn: () => Promise.resolve(getRandomDhikr()) },
   } as const;
   const entry = map[category];
-  entry.fn().then((d) => showNotification(entry.title, d.text));
+  entry.fn().then((d) => {
+    beep(150, 660, 0.15);
+    showNotification(entry.title, `${d.text}\n— ${d.source}`, `dhikr-${category}-${Date.now()}`);
+  });
 }
 
-// Schedule periodic checks against prayer times
 export function schedulePrayerChecks(
   getPrayers: () => Array<{ key: string; label: string; time: string }>,
   enabled: boolean
@@ -68,9 +123,30 @@ export function schedulePrayerChecks(
       }
     }
   };
+  check();
   timer = window.setInterval(check, 30000);
   return () => {
     if (timer) clearInterval(timer);
+  };
+}
+
+export function schedulePeriodicDhikr(enabled: boolean, minMin = 10, maxMin = 15): () => void {
+  let timer: number | undefined;
+  const tick = () => {
+    if (!enabled) return;
+    if (typeof document !== 'undefined' && document.hidden === false) {
+      notifyDhikr('periodic');
+    } else if (notificationSupported() && Notification.permission === 'granted') {
+      notifyDhikr('periodic');
+    }
+    const randomMin = minMin + Math.floor(Math.random() * (maxMin - minMin + 1));
+    const nextDelay = randomMin * 60 * 1000;
+    timer = window.setTimeout(tick, nextDelay);
+  };
+  const initialDelay = (minMin + Math.floor(Math.random() * (maxMin - minMin))) * 60 * 1000;
+  timer = window.setTimeout(tick, initialDelay);
+  return () => {
+    if (timer) clearTimeout(timer);
   };
 }
 

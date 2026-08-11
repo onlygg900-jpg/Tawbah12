@@ -10,6 +10,10 @@ const AIAssistant = lazy(() => import('@/components/AIAssistant'));
 const ChallengesView = lazy(() => import('@/components/ChallengesView'));
 const SettingsView = lazy(() => import('@/components/SettingsView'));
 const LoginPage = lazy(() => import('@/components/LoginPage'));
+const QiblaView = lazy(() => import('@/components/QiblaView'));
+const PrayersView = lazy(() => import('@/components/PrayersView'));
+const TasbeehView = lazy(() => import('@/components/TasbeehView'));
+const AdhkarView = lazy(() => import('@/components/AdhkarView'));
 
 function ViewFallback() {
   return (
@@ -46,21 +50,27 @@ function App() {
     );
   }
 
+  const subView = ['qibla', 'prayers', 'tasbeeh', 'adhkar'].includes(view);
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-emerald-deep" dir="rtl">
       <div className="mx-auto flex max-w-7xl">
         <SideNav current={view} onChange={setView} />
         <main className={`w-full max-w-md mx-auto lg:mx-0 lg:flex-1 xl:max-w-4xl ${view === 'assistant' ? 'max-w-none !mx-0 lg:max-w-none' : 'lg:max-w-2xl'}`}>
           <Suspense fallback={<ViewFallback />}>
-            {view === 'home' && <HomeView />}
+            {view === 'home' && <HomeView onChange={setView} />}
             {view === 'quran' && <QuranView />}
             {view === 'assistant' && <AIAssistant />}
             {view === 'challenges' && <ChallengesView />}
             {view === 'settings' && <SettingsView />}
+            {view === 'qibla' && <QiblaView onChange={setView} />}
+            {view === 'prayers' && <PrayersView onChange={setView} />}
+            {view === 'tasbeeh' && <TasbeehView onChange={setView} />}
+            {view === 'adhkar' && <AdhkarView onChange={setView} />}
           </Suspense>
         </main>
       </div>
-      <BottomNav current={view} onChange={setView} />
+      {!subView && <BottomNav current={view} onChange={setView} />}
     </div>
   );
 }
