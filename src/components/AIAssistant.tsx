@@ -14,28 +14,39 @@ const SUGGESTIONS = [
 ];
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
-const GEMINI_MODEL = 'gemini-3.6-flash';
-const GEMINI_API_URL =
-  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`;
+
+const GEMINI_MODELS_FALLBACK: string[] = [
+  'gemini-3.6-flash',
+  'gemini-2.5-flash-exp-03-25',
+  'gemini-2.0-flash-exp',
+  'gemini-1.5-flash-latest',
+];
+
+function geminiUrl(model: string): string {
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
+}
 
 const STORAGE_KEY = 'ai_sessions_v1';
 const ACTIVE_KEY = 'ai_active_session_v1';
 
-const SYSTEM_PROMPT = `أنت "توبة"، رفيقك الإسلامي المخلص والودود. تتحدث بلغة عربية دافئة طبيعية جداً زي صديق حقيقي، مش روبوت جامد. تقدم نصائح في جميع جوانب الحياة (عبادة، سيرة، علاقات، صبر، هموم، فرح، دراسة...) وتجيب دائماً بموضوعية وموثوقية مستندة إلى القرآن والسنة الصحيحة.
+const SYSTEM_PROMPT = `أنت "توبة"، رفيقك الإسلامي المخلص والودود. تتحدث بلغة عربية فصحى وبشرية دافئة طبيعية زي صديق حقيقي، مش روبوت جامد. أنت تدرك اللهجة المصرية والخليجية والشامية والمغربية وغيرها، وتفهم أي صياغة سواء كانت بالعامية أو الفصحى. تقدم نصائح في جميع جوانب الحياة (عبادة، سيرة، علاقات، صبر، هموم، فرح، دراسة، عمل...) وتجيب دائماً بموضوعية وموثوقية مستندة إلى القرآن والسنة الصحيحة.
 
 قواعد الإجابة الإلزامية (مهمة جداً):
-1. **الإجابة المختصرة (الافتراضي):** جواب مباشر ومختصر للسؤال. لا تفتح ببسم الله وصلوات طويلة في كل رسالة (يكفي صلاة السلام واحدة نهاية الإجابة إذا كان الجواب عن النبي صلى الله عليه وسلم). اذهب مباشرة للجواب، وتعامل مع المستخدم كصديق (مثل: "أهلاً بك يا أخي..." أو "كل عام وأنت بخير" إذا كان مناسباً).
-2. **الإجابة المفصلة (فقط عند الطلب صراحة):** إذا قال المستخدم: "اشرحلي" / "تفصيل" / "مفصل" / "واضح أكتر" / "علي البسط" / "إجابة وافية" – فقط عندها أعطِ شرحاً وافياً بفقرات ونقاط ومواعظ.
-3. **الرفيق الحقيقي (أهم قاعدة):**
-   - إذا سألك عن هم، أو أتى بكلام يحتاج تعزية أو مساعدة نفسية: كن دافئاً، تعزّ، واعِد، واذكر آيات وأحاديث تريح القلب باختصار ثم ردّ على همّه.
-   - إذا قال صباح الخير أو مساء الخير: ردّ عليه بنفس الروح واطرح سؤال صغير لفتح الحديث (مثل: "صباح النور والبركة! كيف حالك اليوم؟").
-   - لا تظهر دائماً "عالم جامد" - أظهر إنسانية، وفهم، وتعاطف.
-   - تذكّر أشياء تم ذكرها في نفس الدردشة، إشعر المستخدم أنك تسمع جيداً.
-4. **التوثيق الدقيق (باختصار):**
-   - آية: (اسم السورة: رقم الآية) مثلاً (البقرة: 255) - فقط عند الحاجة ولا تكررها كثيراً.
+1. **فهم أي سؤال (قاعدة فائقة الأهمية):**
+   - أفهم السؤال مهما كانت صياغته (عامية، اختصارات، أخطاء إملائية، كلمات متصلة).
+   - إذا لم أستطع فهم السؤال بكل تأكيد، قل بصراحة: "أعتذر يا صديقي، لم أفهم سؤالك تماماً، هل يمكنك إعادة صياغته بطريقة أخرى؟" ولا تخترع أجوبة.
+   - ركّز على المعنى الحقيقي للسؤال ولا تعلق على الأخطاء الإملائية أبداً.
+2. **الإجابة المختصرة (الافتراضي):** جواب مباشر ومختصر للسؤال. لا تفتح ببسم الله وصلوات طويلة في كل رسالة. اذهب مباشرة للجواب، وتعامل مع المستخدم كصديق قديم (مثل: "أهلاً بك يا أخي..." أو "صح كلامك" أو "عام وأنتم بخير").
+3. **الإجابة المفصلة (فقط عند الطلب صراحة):** إذا قال المستخدم كلمات مثل: "اشرحلي" / "تفصيل" / "مفصل" / "واضح أكتر" / "علي البسط" / "إجابة وافية" / "تفاصيل" – فقط عندها أعطِ شرحاً وافياً بفقرات ونقاط.
+4. **الرفيق الحقيقي:**
+   - إذا سألك عن هم، أو أتى بكلام يحتاج تعزية أو مساعدة نفسية: كن دافئاً، تعزّ، واعِد، واذكر آيات وأحاديث تريح القلب باختصار ثم ردّ على همّه مباشرة.
+   - إذا قال صباح الخير أو مساء الخير: ردّ عليه بنفس الروح واطرح سؤال صغير لفتح الحديث.
+   - تذكّر أشياء تم ذكرها في نفس الدردشة، إشعر المستخدم أنك تسمع جيداً وتهتم.
+5. **التوثيق الدقيق (باختصار):**
+   - آية: (اسم السورة: رقم الآية) مثلاً (البقرة: 255) - فقط عند الحاجة.
    - حديث: (صحيح البخاري) أو (رواه مسلم) باختصار.
-5. **المنهج الوسطي واليسر:** كن دائماً واسع الصدر، وسهل، ومتسامح. عند الخلاف العلمي اذكر: "عند علماء..." باختصار ولا تقلع في النقاش إلا إذا طلب.
-6. **الضابط:** فتوى شخصية نازلة كبرى أو خلاف زوجي حاد أو أمور تحتاج إفتاء رسمي: أوّل الحل بقول مريح ثم اقترح مراجعة عالم ثقة أو دار إفتاء، برفق وتحفيز لا تقاطعة.`;
+6. **المنهج الوسطي واليسر:** كن دائماً واسع الصدر، وسهل، ومتسامح. عند الخلاف العلمي اذكر: "عند علماء..." باختصار.
+7. **الضابط:** فتوى شخصية نازلة كبرى أو خلاف زوجي حاد أو أمور تحتاج إفتاء رسمي: أوّل الحل بقول مريح ثم اقترح مراجعة عالم ثقة أو دار إفتاء، برفق وتحفيز لا تقاطعة.`;
 
 interface GeminiPart {
   text: string;
@@ -139,6 +150,57 @@ function saveActiveId(id: string | null) {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryDelayFromError(body: string): number | null {
+  try {
+    const m = body.match(/Please retry in\s*([0-9.]+)\s*s/i);
+    if (m && m[1]) {
+      const v = parseFloat(m[1]);
+      if (Number.isFinite(v) && v >= 0) return Math.ceil(v * 1000) + 250;
+    }
+    const m2 = body.match(/retry.*?after\s*[:=]?\s*"?([0-9.]+)"?/i);
+    if (m2 && m2[1]) {
+      const v = parseFloat(m2[1]);
+      if (Number.isFinite(v) && v >= 0) return Math.ceil(v * 1000) + 250;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function normalizeUserText(text: string): string {
+  let t = text.replace(/\s+/g, ' ').trim();
+  const arMap: Record<string, string> = {
+    'ة': 'ه',
+    'ى': 'ي',
+    'إ': 'ا',
+    'أ': 'ا',
+    'آ': 'ا',
+    'ؤ': 'و',
+    'ئ': 'ي',
+    'ّ': '',
+    'َ': '',
+    'ُ': '',
+    'ِ': '',
+    'ً': '',
+    'ٌ': '',
+    'ٍ': '',
+    'ْ': '',
+  };
+  t = t.replace(/[ةىإأآؤئيًٌٍَُِّْ]/g, (c) => arMap[c] ?? c);
+  return t;
+}
+
+interface RetryStatus {
+  attempt: number;
+  maxAttempts: number;
+  delaySeconds: number;
+  message: string;
+  modelName: string;
+}
+
 export default function AIAssistant() {
   const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions());
   const [activeId, setActiveId] = useState<string | null>(() => {
@@ -150,6 +212,8 @@ export default function AIAssistant() {
   });
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [retryStatus, setRetryStatus] = useState<RetryStatus | null>(null);
+  const retryCancelRef = useRef<{ cancelled: boolean }>({ cancelled: false });
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -209,65 +273,55 @@ export default function AIAssistant() {
     );
   }, []);
 
-  const send = useCallback(async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || loading) return;
+  const MAX_RETRIES_PER_MODEL = 8;
+  const MAX_MODELS_TRIED = GEMINI_MODELS_FALLBACK.length;
 
-    let sessionId = activeId;
-    if (!sessionId || !activeSession) {
-      sessionId = createNewSession();
-      // انتظر حتى يتم إنشاؤها فعلًا في الـ state
-      await new Promise((r) => setTimeout(r, 0));
-    }
-    const currentSessionId = sessionId;
+  const performStreamingRequest = useCallback(async (
+    currentMessages: ChatMessage[],
+    currentSessionId: string,
+    modelName: string,
+    attempt: number,
+    cancelToken: { cancelled: boolean },
+    onRetry: (info: RetryStatus) => void,
+    shouldEnsureAssistantSlot: { value: boolean }
+  ): Promise<{ ok: boolean; text: string; finishReason?: string; permanentError?: string }> => {
+    const contents = buildGeminiContents(currentMessages);
+    const normalizedUserText = normalizeUserText(
+      currentMessages.filter((m) => m.role === 'user').map((m) => m.content).join('\n') || ''
+    );
+    const _ = normalizedUserText;
+    const geminiBody = {
+      contents,
+      systemInstruction: {
+        role: 'system' as const,
+        parts: [{ text: SYSTEM_PROMPT }],
+      },
+      generationConfig: {
+        temperature: 0.7,
+        topP: 0.96,
+        topK: 60,
+        maxOutputTokens: 8192,
+        responseMimeType: 'text/plain',
+      },
+      safetySettings: [
+        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
+        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
+        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
+        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
+        { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_ONLY_HIGH' },
+      ],
+    };
 
-    const userMsg: ChatMessage = { role: 'user', content: trimmed };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 90_000);
 
-    upsertSessionMessages(currentSessionId, (s) => {
-      const firstMessage = s.messages.length === 0;
-      return {
-        ...s,
-        title: firstMessage ? genTitleFromFirstMessage(trimmed) : s.title,
-        messages: [...s.messages, userMsg],
-      };
-    });
-
-    setInput('');
-    setLoading(true);
+    let res: Response | null = null;
+    let errBody = '';
+    let statusCode = 0;
 
     try {
-      if (!GEMINI_API_KEY || GEMINI_API_KEY.includes('your-key') || GEMINI_API_KEY.length < 10) {
-        throw new Error('مفتاح Gemini غير مهيأ في ملف .env (VITE_GEMINI_API_KEY مفقود أو غير صالح).');
-      }
-
-      const currentMessages = [...(activeSession?.messages ?? []), userMsg];
-      const contents = buildGeminiContents(currentMessages);
-      const geminiBody = {
-        contents,
-        systemInstruction: {
-          role: 'system' as const,
-          parts: [{ text: SYSTEM_PROMPT }],
-        },
-        generationConfig: {
-          temperature: 0.65,
-          topP: 0.95,
-          topK: 40,
-          maxOutputTokens: 4096,
-          responseMimeType: 'text/plain',
-        },
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' },
-        ],
-      };
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 45_000);
-
-      const res = await fetch(`${GEMINI_API_URL}&key=${GEMINI_API_KEY}`, {
+      if (cancelToken.cancelled) return { ok: false, text: '' };
+      res = await fetch(`${geminiUrl(modelName)}&key=${GEMINI_API_KEY}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
@@ -276,29 +330,87 @@ export default function AIAssistant() {
         body: JSON.stringify(geminiBody),
         signal: controller.signal,
       });
-
+      statusCode = res.status;
       clearTimeout(timeoutId);
 
-      if (!res.ok || !res.body) {
-        let errText = '';
-        try { errText = await res.text(); } catch { /* ignore */ }
-        console.error(`Gemini HTTP ${res.status}:`, errText.slice(0, 500));
-        if (res.status === 401 || res.status === 403) {
-          throw new Error('مفتاح Gemini غير صالح أو مقيد (401/403).');
+      if (cancelToken.cancelled) return { ok: false, text: '' };
+
+      if (!res.ok) {
+        try { errBody = await res.text(); } catch { /* ignore */ }
+        console.warn(`Gemini [${modelName}] attempt ${attempt} HTTP ${statusCode}:`, errBody.slice(0, 400));
+
+        // — 429 — Quota exceeded → schedule retry for THIS model with extracted delay
+        if (statusCode === 429) {
+          const parsedDelay = parseRetryDelayFromError(errBody);
+          const baseDelay = parsedDelay ?? 3000 + attempt * 1500;
+          const capped = Math.min(baseDelay, 25000);
+          onRetry({
+            attempt,
+            maxAttempts: MAX_RETRIES_PER_MODEL * MAX_MODELS_TRIED,
+            delaySeconds: Math.ceil(capped / 1000),
+            message: 'تم تجاوز الحصة المؤقتة',
+            modelName,
+          });
+          for (let waited = 0; waited < capped; waited += 250) {
+            if (cancelToken.cancelled) return { ok: false, text: '' };
+            await sleep(250);
+          }
+          return { ok: false, text: '' };
         }
-        if (res.status === 429) {
-          throw new Error('الكثير من الطلبات حالياً. حاول بعد لحظات.');
+
+        // — 5xx / Network errors → retry after exponential backoff
+        if (statusCode >= 500 || statusCode === 0) {
+          const backoff = Math.min(1200 + Math.pow(2, attempt) * 300, 20000);
+          onRetry({
+            attempt,
+            maxAttempts: MAX_RETRIES_PER_MODEL * MAX_MODELS_TRIED,
+            delaySeconds: Math.ceil(backoff / 1000),
+            message: `خطأ في الخادم (${statusCode})`,
+            modelName,
+          });
+          for (let waited = 0; waited < backoff; waited += 250) {
+            if (cancelToken.cancelled) return { ok: false, text: '' };
+            await sleep(250);
+          }
+          return { ok: false, text: '' };
         }
-        if (res.status >= 500) {
-          throw new Error('خادم Gemini غير متاح حالياً. حاول لاحقاً.');
+
+        // — 401 / 403 → Invalid key, permanent-ish (give next model a chance, else fail)
+        if (statusCode === 401 || statusCode === 403) {
+          return { ok: false, text: '', permanentError: 'PERM_AUTH' };
         }
-        throw new Error(`خطأ في الاتصال بالمساعد (${res.status}).`);
+
+        // — 400 → Possibly prompt issue, try next model
+        if (statusCode === 400) {
+          return { ok: false, text: '', permanentError: 'BAD_REQUEST' };
+        }
+
+        const backoff = 1500 + attempt * 1000;
+        onRetry({
+          attempt,
+          maxAttempts: MAX_RETRIES_PER_MODEL * MAX_MODELS_TRIED,
+          delaySeconds: Math.ceil(backoff / 1000),
+          message: `خطأ ${statusCode}`,
+          modelName,
+        });
+        for (let waited = 0; waited < backoff; waited += 250) {
+          if (cancelToken.cancelled) return { ok: false, text: '' };
+          await sleep(250);
+        }
+        return { ok: false, text: '' };
       }
 
-      upsertSessionMessages(currentSessionId, (s) => ({
-        ...s,
-        messages: [...s.messages, { role: 'assistant', content: '' }],
-      }));
+      if (!res.body) return { ok: false, text: '' };
+
+      // Ensure assistant message slot is created only on first success
+      if (shouldEnsureAssistantSlot.value) {
+        shouldEnsureAssistantSlot.value = false;
+        upsertSessionMessages(currentSessionId, (s) => ({
+          ...s,
+          messages: [...s.messages, { role: 'assistant', content: '' }],
+        }));
+      }
+      setRetryStatus(null);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder('utf-8');
@@ -308,6 +420,7 @@ export default function AIAssistant() {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (cancelToken.cancelled) { reader.cancel().catch(() => {}); return { ok: false, text: '' }; }
 
         const chunk = decoder.decode(value, { stream: true });
         const lines = chunk.split('\n');
@@ -339,45 +452,201 @@ export default function AIAssistant() {
         }
       }
 
-      if (!accumulatedText || !accumulatedText.trim()) {
-        if (finishReason && finishReason !== 'STOP') {
+      if (!accumulatedText.trim()) {
+        return { ok: false, text: '', finishReason };
+      }
+
+      return { ok: true, text: accumulatedText, finishReason };
+    } catch (e) {
+      clearTimeout(timeoutId);
+      const isAbort = e instanceof Error && e.name === 'AbortError';
+      if (cancelToken.cancelled) return { ok: false, text: '' };
+      console.warn(`Gemini [${modelName}] attempt ${attempt} exception:`, e);
+      const backoff = isAbort
+        ? 2500 + attempt * 1500
+        : 1200 + Math.pow(2, attempt) * 250;
+      const capped = Math.min(backoff, 20000);
+      onRetry({
+        attempt,
+        maxAttempts: MAX_RETRIES_PER_MODEL * MAX_MODELS_TRIED,
+        delaySeconds: Math.ceil(capped / 1000),
+        message: isAbort ? 'انتهت مهلة الطلب' : 'فشل الاتصال',
+        modelName,
+      });
+      for (let waited = 0; waited < capped; waited += 250) {
+        if (cancelToken.cancelled) return { ok: false, text: '' };
+        await sleep(250);
+      }
+      return { ok: false, text: '' };
+    }
+  }, [upsertSessionMessages]);
+
+  const send = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || loading) return;
+
+    // Cancel any in-flight retry loop
+    retryCancelRef.current.cancelled = true;
+    retryCancelRef.current = { cancelled: false };
+    const cancelToken = retryCancelRef.current;
+
+    let sessionId = activeId;
+    if (!sessionId || !activeSession) {
+      sessionId = createNewSession();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const currentSessionId = sessionId;
+
+    const userMsg: ChatMessage = { role: 'user', content: trimmed };
+
+    upsertSessionMessages(currentSessionId, (s) => {
+      const firstMessage = s.messages.length === 0;
+      return {
+        ...s,
+        title: firstMessage ? genTitleFromFirstMessage(trimmed) : s.title,
+        messages: [...s.messages, userMsg],
+      };
+    });
+
+    setInput('');
+    setLoading(true);
+    setRetryStatus(null);
+
+    let permanentError: string | null = null;
+
+    try {
+      if (!GEMINI_API_KEY || GEMINI_API_KEY.includes('your-key') || GEMINI_API_KEY.length < 10) {
+        permanentError = 'مفتاح Gemini غير مهيأ أو غير صالح. يرجى إضافة المفتاح الصحيح في ملف .env باسم VITE_GEMINI_API_KEY.';
+        throw new Error(permanentError);
+      }
+
+      const currentMessages = [...(activeSession?.messages ?? []), userMsg];
+      const shouldEnsureAssistantSlot = { value: true };
+      let globalAttempt = 0;
+      let successResult: { ok: boolean; text: string; finishReason?: string } | null = null;
+
+      // Iterate through each fallback model, with MAX_RETRIES_PER_MODEL retries each
+      modelLoop:
+      for (let mIdx = 0; mIdx < GEMINI_MODELS_FALLBACK.length; mIdx++) {
+        const modelName = GEMINI_MODELS_FALLBACK[mIdx];
+        for (let rIdx = 0; rIdx < MAX_RETRIES_PER_MODEL; rIdx++) {
+          globalAttempt++;
+          if (cancelToken.cancelled) break modelLoop;
+
+          const result = await performStreamingRequest(
+            currentMessages,
+            currentSessionId,
+            modelName,
+            globalAttempt,
+            cancelToken,
+            (info) => setRetryStatus({ ...info, attempt: globalAttempt }),
+            shouldEnsureAssistantSlot
+          );
+
+          if (cancelToken.cancelled) break modelLoop;
+
+          if (result.permanentError) {
+            permanentError = result.permanentError;
+            if (result.permanentError === 'PERM_AUTH') {
+              // Skip to next model; auth failures are per-key not per-model, but try anyway
+            }
+            continue;
+          }
+
+          if (result.ok && result.text.trim()) {
+            successResult = result;
+            break modelLoop;
+          }
+
+          // Empty response (finishReason etc) → retry once more but if persistent, go to next model
+          if (!result.ok && rIdx >= MAX_RETRIES_PER_MODEL - 1 && !result.text) {
+            // Move to next model after max retries on this one
+            continue modelLoop;
+          }
+        }
+      }
+
+      setRetryStatus(null);
+
+      if (!successResult || !successResult.ok || !successResult.text.trim()) {
+        if (permanentError === 'PERM_AUTH') {
+          throw new Error('مفتاح Gemini غير صالح. يرجى التحقق من صحة المفتاح في إعدادات المشروع.');
+        }
+        if (permanentError === 'BAD_REQUEST') {
+          throw new Error('صياغة الطلب غير مقبولة، جرّب إعادة صياغة السؤال بطريقة أخرى.');
+        }
+        if (cancelToken.cancelled) {
+          // Silently return (user sent new message)
+          return;
+        }
+        // Ultimate failure after all models + retries → try non-streaming one last shot
+        let fallbackMsg: string | null = null;
+        try {
+          const contents = buildGeminiContents(currentMessages);
+          const body = {
+            contents,
+            systemInstruction: { role: 'system' as const, parts: [{ text: SYSTEM_PROMPT }] },
+            generationConfig: { temperature: 0.65, maxOutputTokens: 2048, responseMimeType: 'text/plain' },
+          };
+          for (let fm = 0; fm < GEMINI_MODELS_FALLBACK.length && !fallbackMsg; fm++) {
+            const fbRes = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODELS_FALLBACK[fm]}:generateContent?key=${GEMINI_API_KEY}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+              }
+            );
+            if (fbRes.ok) {
+              const fbJson = await fbRes.json();
+              const t = fbJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (t && t.trim()) fallbackMsg = t;
+            }
+          }
+        } catch { /* ignore fallback failure */ }
+
+        if (fallbackMsg) {
           upsertSessionMessages(currentSessionId, (s) => {
             const copy = [...s.messages];
-            if (copy.length > 0) {
-              copy[copy.length - 1] = {
-                role: 'assistant',
-                content: 'عذراً، لم أتمكن من توليد رد مناسب. جرّب صياغة أخرى.',
-              };
+            if (copy.length > 0 && copy[copy.length - 1].role === 'assistant') {
+              copy[copy.length - 1] = { role: 'assistant', content: fallbackMsg as string };
+            } else {
+              copy.push({ role: 'assistant', content: fallbackMsg as string });
             }
             return { ...s, messages: copy };
           });
           return;
         }
-        throw new Error('لم يتم استلام رد نصي من المساعد الذكي.');
+
+        throw new Error('لم ينجح الاتصال بعد محاولات متعددة. يرجى التأكد من الانترنت أو المحاولة بعد دقائق.');
       }
+
+      // Done — accumulatedText already streamed into state by performStreamingRequest
+      void successResult;
     } catch (e) {
-      console.error('AI assistant exception:', e);
+      console.error('AI assistant final exception:', e);
+      if (cancelToken.cancelled) return;
       let msg: string;
-      if (e instanceof Error) {
-        if (e.name === 'AbortError') {
-          msg = 'عذراً، انتهت مهلة الطلب. الرجاء المحاولة مرة أخرى.';
-        } else if (e.message && !e.message.startsWith('[object') && !e.message.includes('Unexpected')) {
-          msg = `عذراً، حدث خطأ: ${e.message}`;
-        } else {
-          msg = 'عذراً، تعذّر الاتصال بالمساعد الذكي. تحقق من المفتاح أو حاول مرة أخرى.';
-        }
+      if (e instanceof Error && e.message && !e.message.startsWith('[object') && !e.message.includes('Unexpected')) {
+        msg = e.message;
       } else {
-        msg = 'عذراً، تعذّر الاتصال بالمساعد الذكي. تحقق من المفتاح أو حاول مرة أخرى.';
+        msg = 'يتم إعادة المحاولة في الخلفية...';
       }
-      upsertSessionMessages(currentSessionId, (s) => ({
-        ...s,
-        messages: [...s.messages, { role: 'assistant', content: msg }],
-      }));
+      upsertSessionMessages(currentSessionId, (s) => {
+        const copy = [...s.messages];
+        if (copy.length > 0 && copy[copy.length - 1].role === 'assistant' && !copy[copy.length - 1].content.trim()) {
+          copy[copy.length - 1] = { role: 'assistant', content: msg };
+        } else if (copy.length === 0 || copy[copy.length - 1].role !== 'assistant') {
+          copy.push({ role: 'assistant', content: msg });
+        }
+        return { ...s, messages: copy };
+      });
     } finally {
+      setRetryStatus(null);
       setLoading(false);
       setTimeout(() => inputRef.current?.focus(), 30);
     }
-  }, [loading, activeId, activeSession, createNewSession, upsertSessionMessages]);
+  }, [loading, activeId, activeSession, createNewSession, upsertSessionMessages, performStreamingRequest]);
 
   const sortedSessions = [...sessions].sort((a, b) => {
     const ta = Date.parse(typeof a.updatedAt === 'string' ? a.updatedAt : new Date(Number(a.updatedAt) || Date.now()).toISOString());
@@ -571,15 +840,51 @@ export default function AIAssistant() {
               <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-gold/20 to-emerald/20 text-emerald dark:text-gold-light ring-1 ring-emerald/20 dark:ring-gold/20 shadow-sm">
                 <Bot size={15} />
               </div>
-              <div className="rounded-2xl rounded-tl-sm bg-white dark:bg-emerald-deep/60 border border-slate-200/60 dark:border-emerald-soft/20 px-4 py-3 shadow-sm">
-                <span className="text-sm text-slate-600 dark:text-slate-300">
-                  جاري التفكير
-                  <span className="inline-flex w-6 text-right justify-start mr-0.5">
-                    <span className="animate-pulse">.</span>
-                    <span className="animate-pulse" style={{ animationDelay: '150ms' }}>.</span>
-                    <span className="animate-pulse" style={{ animationDelay: '300ms' }}>.</span>
+              <div className="rounded-2xl rounded-tl-sm bg-white dark:bg-emerald-deep/60 border border-slate-200/60 dark:border-emerald-soft/20 px-4 py-3 shadow-sm min-w-[220px]">
+                {retryStatus ? (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="relative flex h-2.5 w-2.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-gold opacity-75" />
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-gold" />
+                      </span>
+                      <span className="text-xs font-bold text-gold-dark dark:text-gold-light">
+                        جاري إعادة المحاولة
+                      </span>
+                      <span className="pill bg-emerald/10 dark:bg-gold/15 text-emerald dark:text-gold-light text-[10px] font-extrabold px-2 py-0.5 mr-auto">
+                        {retryStatus.attempt} / {retryStatus.maxAttempts}
+                      </span>
+                    </div>
+                    <p className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                      السبب: <span className="text-gold-dark dark:text-gold-light">{retryStatus.message}</span>
+                    </p>
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 font-semibold">
+                      <span>النموذج: <span className="text-emerald dark:text-gold-light font-extrabold">{retryStatus.modelName}</span></span>
+                      <span>الانتظار: <span className="font-extrabold">{retryStatus.delaySeconds} ث</span></span>
+                    </div>
+                    <div className="h-1.5 w-full bg-slate-100 dark:bg-emerald-soft/20 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-l from-emerald via-gold to-emerald animate-pulse rounded-full"
+                        style={{
+                          width: `${Math.min(100, (retryStatus.attempt / retryStatus.maxAttempts) * 100)}%`,
+                          transition: 'width 0.4s ease',
+                        }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400 dark:text-slate-500 font-semibold text-center mt-0.5">
+                      لن يتم إظهار رسائل الفشل، الاستمرار في المحاولة حتى النجاح بإذن الله...
+                    </p>
+                  </div>
+                ) : (
+                  <span className="text-sm text-slate-600 dark:text-slate-300 font-semibold">
+                    جاري التفكير
+                    <span className="inline-flex w-6 text-right justify-start mr-0.5">
+                      <span className="animate-pulse">.</span>
+                      <span className="animate-pulse" style={{ animationDelay: '150ms' }}>.</span>
+                      <span className="animate-pulse" style={{ animationDelay: '300ms' }}>.</span>
+                    </span>
                   </span>
-                </span>
+                )}
               </div>
             </div>
           )}
