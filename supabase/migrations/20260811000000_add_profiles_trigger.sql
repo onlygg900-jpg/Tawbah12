@@ -85,8 +85,29 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 -- =====================================================================
--- 4. Backfill: create missing profiles rows for any existing users
+-- 4. Enable Row Level Security (MANDATORY — otherwise 403 Forbidden)
+-- =====================================================================
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS p_profiles_sel ON public.profiles;
+DROP POLICY IF EXISTS p_profiles_ins ON public.profiles;
+DROP POLICY IF EXISTS p_profiles_upd ON public.profiles;
+
+CREATE POLICY p_profiles_sel ON public.profiles FOR SELECT TO authenticated
+  USING (true);
+
+CREATE POLICY p_profiles_ins ON public.profiles FOR INSERT TO authenticated
+  WITH CHECK (auth.uid() = id);
+
+CREATE POLICY p_profiles_upd ON public.profiles FOR UPDATE TO authenticated
+  USING (auth.uid() = id)
+  WITH CHECK (auth.uid() = id);
+
+-- =====================================================================
+-- 5. Backfill: create missing profiles rows for any existing users
 --    that already exist in auth.users but not in public.profiles.
+--    Runs with the caller's privilege which in SQL Editor is usually superuser,
+--    so it bypasses RLS and fills missing rows even for existing users.
 -- =====================================================================
 INSERT INTO public.profiles (id, display_name, email, created_at)
 SELECT
@@ -103,3 +124,36 @@ FROM auth.users au
 LEFT JOIN public.profiles p ON p.id = au.id
 WHERE p.id IS NULL
 ON CONFLICT (id) DO NOTHING;
+
+-- =====================================================================
+-- 6. Ensure daily_progress also has RLS + sensible policies
+--    (if you applied the old init script these are no-ops — safe to rerun)
+-- =====================================================================
+ALTER TABLE IF EXISTS public.daily_progress ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS p_daily_progress_sel ON public.daily_progress;
+DROP POLICY IF EXISTS p_daily_progress_ins ON public.daily_progress;
+DROP POLICY IF EXISTS p_daily_progress_upd ON public.daily_progress;
+
+CREATE POLICY p_daily_progress_sel ON public.daily_progress FOR SELECT TO authenticated
+  USING (auth.uid() = user_id);
+
+CREATE POLICY p_daily_progress_ins ON public.daily_progress FOR INSERT TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY p_daily_progress_upd ON public.daily_progress FOR UPDATE TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+-- =====================================================================
+-- 7. Ensure authenticated role has basic grants (belt + suspenders)
+-- =====================================================================
+GRANT USAGE ON SCHEMA public TO authenticated, anon;
+GRANT ALL ON TABLE public.profiles       TO authenticated, postgres;
+GRANT ALL ON TABLE public.daily_progress TO authenticated, postgres;
+GRANT ALL ON TABLE public.challenges     TO authenticated, postgres;
+GRANT ALL ON TABLE public.challenge_entries TO authenticated, postgres;
+GRANT ALL ON TABLE public.families       TO authenticated, postgres;
+GRANT ALL ON TABLE public.family_members TO authenticated, postgres;
+GRANT ALL ON TABLE public.daily_quests   TO authenticated, postgres;
+GRANT ALL ON TABLE public.quest_progress TO authenticated, postgres;

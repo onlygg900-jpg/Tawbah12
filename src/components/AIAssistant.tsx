@@ -71,7 +71,41 @@ function genTitleFromFirstMessage(text: string): string {
 }
 
 function loadSessions(): ChatSession[] {
-  return loadState<ChatSession[]>(STORAGE_KEY, []);
+  const result = loadState<ChatSession[]>(STORAGE_KEY, []);
+  let list: any[] = result;
+  if (!Array.isArray(list) && list && typeof list === 'object') {
+    list = Object.values(list).filter((v) => v && typeof v === 'object');
+  }
+  if (!Array.isArray(list)) return [];
+  const safe: ChatSession[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    if (typeof item.id !== 'string') continue;
+    if (typeof item.title !== 'string') continue;
+    if (!Array.isArray(item.messages)) continue;
+    const msgs: ChatMessage[] = [];
+    for (const m of item.messages) {
+      if (
+        m &&
+        typeof m === 'object' &&
+        (m.role === 'user' || m.role === 'assistant') &&
+        typeof m.content === 'string'
+      ) {
+        msgs.push({ role: m.role, content: m.content });
+      }
+    }
+    safe.push({
+      id: item.id,
+      title: item.title,
+      messages: msgs,
+      createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
+      updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : Date.now(),
+    });
+  }
+  if (safe.length !== list.length || !Array.isArray(result)) {
+    saveState<ChatSession[]>(STORAGE_KEY, safe);
+  }
+  return safe;
 }
 
 function saveSessions(sessions: ChatSession[]) {
