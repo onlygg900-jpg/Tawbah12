@@ -1,4 +1,4 @@
-import { Home, BookOpen, Users, Settings as SettingsIcon } from 'lucide-react';
+import { Home, BookOpen, Users, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 import type { ViewKey } from '@/types';
 
 interface NavBarProps {
@@ -9,6 +9,7 @@ interface NavBarProps {
 const TABS: { key: ViewKey; label: string; icon: typeof Home }[] = [
   { key: 'home', label: 'الرئيسية', icon: Home },
   { key: 'quran', label: 'القرآن', icon: BookOpen },
+  { key: 'assistant', label: 'توبة', icon: Sparkles },
   { key: 'challenges', label: 'التحديات', icon: Users },
   { key: 'settings', label: 'الإعدادات', icon: SettingsIcon },
 ];

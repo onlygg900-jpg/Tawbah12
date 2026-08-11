@@ -1,4 +1,4 @@
-import { Home, BookOpen, Users, Settings as SettingsIcon, Moon } from 'lucide-react';
+import { Home, BookOpen, Users, Settings as SettingsIcon, Sparkles, Moon } from 'lucide-react';
 import type { ViewKey } from '@/types';
 import { useApp } from '@/context/AppContext';
 
@@ -10,6 +10,7 @@ interface SideNavProps {
 const TABS: { key: ViewKey; label: string; icon: typeof Home }[] = [
   { key: 'home', label: 'الرئيسية', icon: Home },
   { key: 'quran', label: 'القرآن', icon: BookOpen },
+  { key: 'assistant', label: 'مساعد توبة', icon: Sparkles },
   { key: 'challenges', label: 'التحديات', icon: Users },
   { key: 'settings', label: 'الإعدادات', icon: SettingsIcon },
 ];

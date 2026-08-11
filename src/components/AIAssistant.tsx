@@ -1,17 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { MessageCircle, X, Send, Sparkles } from 'lucide-react';
+import { MessageCircle, Send, Sparkles, Plus, Trash2, MessageSquare, ChevronRight, Bot, User } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
+import { loadState, saveState } from '@/services/storage';
+import type { ChatSession, ChatMessage } from '@/types';
+import { uuid } from '@/utils/uuid';
 
 const SUGGESTIONS = [
   'ما فضل صلاة الفجر في جماعة؟',
   'كيف أُكثر من الاستغفار؟',
   'ما هي أذكار الصباح؟',
   'كيف أبدأ ختمة القرآن؟',
+  'أدعية تريح القلب',
 ];
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
@@ -19,23 +18,24 @@ const GEMINI_MODEL = 'gemini-3.6-flash';
 const GEMINI_API_URL =
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`;
 
-const SYSTEM_PROMPT = `أنت "توبة"، عالم وموجّه إسلامي مختصر ومباشر متخصص في جميع العلوم الشرعية (العقيدة، التفسير، الحديث الشريف، الفقه الميسر، والسيرة النبوية). مهمتك هي تقديم إجابات دقيقة وموثوقة تماماً، مستندة حصرياً إلى القرآن الكريم والسنة النبوية الصحيحة، وفقاً لمنهج أهل السنة والجماعة.
+const STORAGE_KEY = 'ai_sessions_v1';
+const ACTIVE_KEY = 'ai_active_session_v1';
+
+const SYSTEM_PROMPT = `أنت "توبة"، رفيقك الإسلامي المخلص والودود. تتحدث بلغة عربية دافئة طبيعية جداً زي صديق حقيقي، مش روبوت جامد. تقدم نصائح في جميع جوانب الحياة (عبادة، سيرة، علاقات، صبر، هموم، فرح، دراسة...) وتجيب دائماً بموضوعية وموثوقية مستندة إلى القرآن والسنة الصحيحة.
 
 قواعد الإجابة الإلزامية (مهمة جداً):
-1. **الإجابة المختصرة (الافتراضي):** رد مباشر ومختصر جواب السؤال فقط بلا مقدمات طويلة أو بسم الله مكرر أو صلوات طويلة في كل رسالة. لا تفتح إلا بتحية قصيرة إذا لزم، واذهب مباشرة للجواب. اكفِ بذكر الدليل أو الآية باختصار (مثال: [البقرة:255]) بدون إطالة.
-2. **الإجابة المفصلة (فقط عند الطلب صراحة):** إذا قال المستخدم كلمات مثل: "اشرحلي"، "تفصيل"، "مفصل"، "واضح"، "إجابة وافية"، "علي البسط" – فقط عندها أعطِ إجابة وافية ومفصلة بفقرات ونقاط.
-3. **التوثيق الدقيق (باختصار):** عند الاستشهاد اذكر المصدر باختصار فقط:
-   - آية: اذكر اسم السورة ورقمها بين أقواس مثل (البقرة: 255) وآخرها آية كاملة إذا كانت قصيرة.
-   - حديث: اذكر المصدر المختصر مثل (صحيح مسلم) أو (أخرجه البخاري).
-4. **المنهج الوسطي واليسر:** قدم الأحكام بأسلوب يسر. عند وجود خلاف فقهي معتدل بذكر الاختلاف باختصار جداً إلا إذا طلب التفصيل.
-5. **الأسلوب:** لغة عربية فصحى مبسطة، دافئة، ودون مواعظ أو وعظات لا علاقة لها بالسؤال إلا إذا طلبها المستخدم.
-6. **الضابط:** إذا السؤال فتوى خاصة أو نازلة كبرى تحتاج تخصص، وجّه السائل بحكمة لمراجعة علم ثقة أو دار إفتاء، باختصار.
-
-مثال لرد صحيح مختصر:
-س: متى ولد رسول الله صلى الله عليه وسلم؟
-ج: ولد النبي صلى الله عليه وسلم يوم الإثنين في شهر ربيع الأول عام الفيل (حوالي سنة 571م). المتداول بين المؤرخين 12 ربيع الأول، والراجح عند بعض المحققين 9 ربيع الأول، وكلاهما صحيح السنة. دليل أنّه ولد يوم الإثنين: حديث صحيح مسلم (1162).
-
-ثَمَّ إن قال المستخدم "اشرحلي أكتر" أو "تفصيل" – اكتب الشرح المفصل.`;
+1. **الإجابة المختصرة (الافتراضي):** جواب مباشر ومختصر للسؤال. لا تفتح ببسم الله وصلوات طويلة في كل رسالة (يكفي صلاة السلام واحدة نهاية الإجابة إذا كان الجواب عن النبي صلى الله عليه وسلم). اذهب مباشرة للجواب، وتعامل مع المستخدم كصديق (مثل: "أهلاً بك يا أخي..." أو "كل عام وأنت بخير" إذا كان مناسباً).
+2. **الإجابة المفصلة (فقط عند الطلب صراحة):** إذا قال المستخدم: "اشرحلي" / "تفصيل" / "مفصل" / "واضح أكتر" / "علي البسط" / "إجابة وافية" – فقط عندها أعطِ شرحاً وافياً بفقرات ونقاط ومواعظ.
+3. **الرفيق الحقيقي (أهم قاعدة):**
+   - إذا سألك عن هم، أو أتى بكلام يحتاج تعزية أو مساعدة نفسية: كن دافئاً، تعزّ، واعِد، واذكر آيات وأحاديث تريح القلب باختصار ثم ردّ على همّه.
+   - إذا قال صباح الخير أو مساء الخير: ردّ عليه بنفس الروح واطرح سؤال صغير لفتح الحديث (مثل: "صباح النور والبركة! كيف حالك اليوم؟").
+   - لا تظهر دائماً "عالم جامد" - أظهر إنسانية، وفهم، وتعاطف.
+   - تذكّر أشياء تم ذكرها في نفس الدردشة، إشعر المستخدم أنك تسمع جيداً.
+4. **التوثيق الدقيق (باختصار):**
+   - آية: (اسم السورة: رقم الآية) مثلاً (البقرة: 255) - فقط عند الحاجة ولا تكررها كثيراً.
+   - حديث: (صحيح البخاري) أو (رواه مسلم) باختصار.
+5. **المنهج الوسطي واليسر:** كن دائماً واسع الصدر، وسهل، ومتسامح. عند الخلاف العلمي اذكر: "عند علماء..." باختصار ولا تقلع في النقاش إلا إذا طلب.
+6. **الضابط:** فتوى شخصية نازلة كبرى أو خلاف زوجي حاد أو أمور تحتاج إفتاء رسمي: أوّل الحل بقول مريح ثم اقترح مراجعة عالم ثقة أو دار إفتاء، برفق وتحفيز لا تقاطعة.`;
 
 interface GeminiPart {
   text: string;
@@ -64,26 +64,130 @@ function buildGeminiContents(messages: ChatMessage[]): GeminiContent[] {
   return contents;
 }
 
+function genTitleFromFirstMessage(text: string): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (clean.length <= 30) return clean;
+  return clean.slice(0, 28).trimEnd() + '…';
+}
+
+function loadSessions(): ChatSession[] {
+  return loadState<ChatSession[]>(STORAGE_KEY, []);
+}
+
+function saveSessions(sessions: ChatSession[]) {
+  saveState<ChatSession[]>(STORAGE_KEY, sessions);
+}
+
+function loadActiveId(): string | null {
+  try {
+    return localStorage.getItem('tawbah:' + ACTIVE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveActiveId(id: string | null) {
+  try {
+    if (id) localStorage.setItem('tawbah:' + ACTIVE_KEY, id);
+    else localStorage.removeItem('tawbah:' + ACTIVE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export default function AIAssistant() {
-  const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions());
+  const [activeId, setActiveId] = useState<string | null>(() => {
+    const saved = loadActiveId();
+    const list = loadSessions();
+    if (saved && list.find((s) => s.id === saved)) return saved;
+    if (list.length > 0) return list[0].id;
+    return null;
+  });
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    saveSessions(sessions);
+  }, [sessions]);
+
+  useEffect(() => {
+    saveActiveId(activeId);
+  }, [activeId]);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, loading]);
+  }, [sessions, activeId, loading]);
+
+  const activeSession = sessions.find((s) => s.id === activeId) ?? null;
+  const messages = activeSession?.messages ?? [];
+
+  const createNewSession = useCallback((): string => {
+    const now = new Date().toISOString();
+    const ns: ChatSession = {
+      id: uuid(),
+      title: 'دردشة جديدة',
+      messages: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    setSessions((prev) => [ns, ...prev]);
+    setActiveId(ns.id);
+    setInput('');
+    setLoading(false);
+    setTimeout(() => inputRef.current?.focus(), 50);
+    return ns.id;
+  }, []);
+
+  const ensureSession = useCallback((): string => {
+    if (activeSession && activeSession.messages.length === 0) return activeSession.id;
+    return createNewSession();
+  }, [activeSession, createNewSession]);
+
+  const deleteSession = useCallback((id: string) => {
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      if (activeId === id) {
+        const newActive = next.length > 0 ? next[0].id : null;
+        setActiveId(newActive);
+      }
+      return next;
+    });
+  }, [activeId]);
+
+  const upsertSessionMessages = useCallback((sessionId: string, updater: (s: ChatSession) => ChatSession) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? updater({ ...s, updatedAt: new Date().toISOString() }) : s))
+    );
+  }, []);
 
   const send = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || loading) return;
 
+    let sessionId = activeId;
+    if (!sessionId || !activeSession) {
+      sessionId = createNewSession();
+      // انتظر حتى يتم إنشاؤها فعلًا في الـ state
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const currentSessionId = sessionId;
+
     const userMsg: ChatMessage = { role: 'user', content: trimmed };
-    const nextMessages = [...messages, userMsg];
-    setMessages(nextMessages);
+
+    upsertSessionMessages(currentSessionId, (s) => {
+      const firstMessage = s.messages.length === 0;
+      return {
+        ...s,
+        title: firstMessage ? genTitleFromFirstMessage(trimmed) : s.title,
+        messages: [...s.messages, userMsg],
+      };
+    });
+
     setInput('');
     setLoading(true);
 
@@ -92,7 +196,8 @@ export default function AIAssistant() {
         throw new Error('مفتاح Gemini غير مهيأ في ملف .env (VITE_GEMINI_API_KEY مفقود أو غير صالح).');
       }
 
-      const contents = buildGeminiContents(nextMessages);
+      const currentMessages = [...(activeSession?.messages ?? []), userMsg];
+      const contents = buildGeminiContents(currentMessages);
       const geminiBody = {
         contents,
         systemInstruction: {
@@ -100,23 +205,23 @@ export default function AIAssistant() {
           parts: [{ text: SYSTEM_PROMPT }],
         },
         generationConfig: {
-          temperature: 0.6,
+          temperature: 0.65,
           topP: 0.95,
           topK: 40,
           maxOutputTokens: 4096,
           responseMimeType: 'text/markdown',
         },
-safetySettings: [
+        safetySettings: [
           { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
           { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
           { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
           { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' }
+          { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' },
         ],
       };
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 25_000);
+      const timeoutId = setTimeout(() => controller.abort(), 45_000);
 
       const res = await fetch(`${GEMINI_API_URL}&key=${GEMINI_API_KEY}`, {
         method: 'POST',
@@ -134,7 +239,6 @@ safetySettings: [
         let errText = '';
         try { errText = await res.text(); } catch { /* ignore */ }
         console.error(`Gemini HTTP ${res.status}:`, errText.slice(0, 500));
-
         if (res.status === 401 || res.status === 403) {
           throw new Error('مفتاح Gemini غير صالح أو مقيد (401/403).');
         }
@@ -147,7 +251,10 @@ safetySettings: [
         throw new Error(`خطأ في الاتصال بالمساعد (${res.status}).`);
       }
 
-      setMessages((m) => [...m, { role: 'assistant', content: '' }]);
+      upsertSessionMessages(currentSessionId, (s) => ({
+        ...s,
+        messages: [...s.messages, { role: 'assistant', content: '' }],
+      }));
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder('utf-8');
@@ -170,17 +277,19 @@ safetySettings: [
               const textChunk = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
               if (textChunk) {
                 accumulatedText += textChunk;
-                setMessages((m) => {
-                  const copy = [...m];
-                  copy[copy.length - 1] = { role: 'assistant', content: accumulatedText };
-                  return copy;
+                upsertSessionMessages(currentSessionId, (s) => {
+                  const copy = [...s.messages];
+                  if (copy.length > 0) {
+                    copy[copy.length - 1] = { role: 'assistant', content: accumulatedText };
+                  }
+                  return { ...s, messages: copy };
                 });
               }
               if (parsed?.candidates?.[0]?.finishReason) {
                 finishReason = parsed.candidates[0].finishReason;
               }
             } catch {
-              // تجاهل أخطاء تحليل أجزاء الـ JSON غير الكاملة أثناء التدفق
+              // ignore incomplete JSON chunks
             }
           }
         }
@@ -188,13 +297,15 @@ safetySettings: [
 
       if (!accumulatedText || !accumulatedText.trim()) {
         if (finishReason && finishReason !== 'STOP') {
-          setMessages((m) => {
-            const copy = [...m];
-            copy[copy.length - 1] = {
-              role: 'assistant',
-              content: 'عذراً، لم أتمكن من توليد رد مناسب لهذا السؤال. جرّب صياغة أخرى.',
-            };
-            return copy;
+          upsertSessionMessages(currentSessionId, (s) => {
+            const copy = [...s.messages];
+            if (copy.length > 0) {
+              copy[copy.length - 1] = {
+                role: 'assistant',
+                content: 'عذراً، لم أتمكن من توليد رد مناسب. جرّب صياغة أخرى.',
+              };
+            }
+            return { ...s, messages: copy };
           });
           return;
         }
@@ -214,140 +325,227 @@ safetySettings: [
       } else {
         msg = 'عذراً، تعذّر الاتصال بالمساعد الذكي. تحقق من المفتاح أو حاول مرة أخرى.';
       }
-      setMessages((m) => [...m, { role: 'assistant', content: msg }]);
+      upsertSessionMessages(currentSessionId, (s) => ({
+        ...s,
+        messages: [...s.messages, { role: 'assistant', content: msg }],
+      }));
     } finally {
       setLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 30);
     }
-  }, [messages, loading]);
+  }, [loading, activeId, activeSession, createNewSession, upsertSessionMessages]);
+
+  const sortedSessions = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
   return (
-    <>
-      {/* Floating button */}
-      {!open && (
-        <button
-          onClick={() => setOpen(true)}
-          className="fixed bottom-20 left-4 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-emerald to-emerald-deep text-white shadow-xl shadow-emerald/30 transition active:scale-90 lg:bottom-6 lg:left-6"
-          aria-label="المساعد الذكي"
-        >
-          <Sparkles size={24} />
-          <span className="absolute -top-1 -right-1 flex h-4 w-4">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-gold/60 opacity-75" />
-            <span className="relative inline-flex h-4 w-4 rounded-full bg-gold" />
-          </span>
-        </button>
-      )}
+    <div className="flex h-[calc(100vh-56px)] lg:h-screen overflow-hidden" dir="rtl">
+      {/* Sidebar - Chat Sessions */}
+      <aside className="hidden md:flex w-64 shrink-0 flex-col border-l border-slate-200/80 dark:border-emerald-soft/30 bg-white/60 dark:bg-emerald-deep/60 backdrop-blur-lg">
+        <div className="p-3">
+          <button
+            onClick={createNewSession}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-l from-emerald to-emerald-deep px-3 py-2.5 text-sm font-bold text-white shadow-md shadow-emerald/20 transition hover:shadow-lg active:scale-95 dark:from-gold dark:to-gold-dark dark:text-emerald-deep dark:shadow-gold/20"
+          >
+            <Plus size={18} />
+            دردشة جديدة
+          </button>
+        </div>
 
-      {/* Chat panel */}
-      {open && (
-        <div className="fixed bottom-20 left-4 z-50 flex h-[60vh] max-h-[520px] w-[calc(100vw-2rem)] max-w-sm flex-col overflow-hidden rounded-2xl border border-slate-200 dark:border-emerald-soft/30 bg-white dark:bg-emerald-deep shadow-2xl lg:bottom-6 lg:left-6 lg:w-96">
-          {/* Header */}
-          <div className="flex items-center justify-between bg-gradient-to-l from-emerald to-emerald-deep px-4 py-3 text-white">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/15">
-                <Sparkles size={18} />
-              </div>
-              <div>
-                <p className="text-sm font-bold">مساعد توبة</p>
-                <p className="text-[10px] text-emerald-100">اسألني عن أي شيء</p>
-              </div>
+        <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-1">
+          {sortedSessions.length === 0 && (
+            <div className="px-3 py-10 text-center text-xs text-slate-400 dark:text-slate-500">
+              لا توجد دردشات سابقة
+              <p className="mt-1">ابدأ دردشتك الأولى مع مساعد توبة</p>
             </div>
-            <button
-              onClick={() => setOpen(false)}
-              className="rounded-lg p-1.5 transition hover:bg-white/15"
-              aria-label="إغلاق"
-            >
-              <X size={20} />
-            </button>
-          </div>
-
-          {/* Messages */}
-          <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
-            {messages.length === 0 && (
-              <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald/10 dark:bg-gold/10">
-                  <MessageCircle size={32} className="text-emerald dark:text-gold-light" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-700 dark:text-slate-200">مرحباً بك في مساعد توبة</p>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">اسألني عن الأذكار، الصلاة، القرآن، أو أي سؤال إسلامي</p>
-                </div>
-                <div className="flex flex-wrap justify-center gap-2">
-                  {SUGGESTIONS.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => send(s)}
-                      className="rounded-full border border-emerald/20 dark:border-gold/20 bg-emerald/5 dark:bg-gold/5 px-3 py-1.5 text-[11px] font-semibold text-emerald dark:text-gold-light transition hover:bg-emerald/10 dark:hover:bg-gold/10"
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {messages.map((msg, i) => (
-              <div
-                key={i}
-                className={`flex ${msg.role === 'user' ? 'justify-start' : 'justify-end'}`}
-              >
-                <div
-                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
-                    msg.role === 'user'
-                      ? 'bg-emerald text-white rounded-bl-sm'
-                      : 'bg-slate-100 dark:bg-emerald-soft/30 text-slate-800 dark:text-slate-100 rounded-br-sm markdown-content'
+          )}
+          {sortedSessions.map((s) => {
+            const active = s.id === activeId;
+            const preview = s.messages.length > 0 ? s.messages[s.messages.length - 1]?.content : 'بدء الدردشة';
+            return (
+              <div key={s.id} className="group relative">
+                <button
+                  onClick={() => setActiveId(s.id)}
+                  className={`flex w-full items-start gap-2 rounded-xl px-3 py-2.5 text-right transition ${
+                    active
+                      ? 'bg-emerald/10 dark:bg-gold/15 text-emerald-deep dark:text-gold-light'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-emerald-soft/20'
                   }`}
                 >
-                  {msg.role === 'user' ? (
-                    msg.content
-                  ) : (
-                    <div dir="rtl" className="markdown-body">
-                      <ReactMarkdown
-                        components={{
-                          p: ({ children }) => <p className="mb-2 last:mb-0 whitespace-pre-wrap">{children}</p>,
-                          h1: ({ children }) => <h1 className="text-lg font-bold mb-2 mt-3 text-emerald dark:text-gold-light">{children}</h1>,
-                          h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-3 text-emerald dark:text-gold-light">{children}</h2>,
-                          h3: ({ children }) => <h3 className="text-sm font-bold mb-1.5 mt-2.5 text-emerald-deep dark:text-gold">{children}</h3>,
-                          h4: ({ children }) => <h4 className="text-sm font-bold mb-1 mt-2 text-emerald-deep dark:text-gold">{children}</h4>,
-                          strong: ({ children }) => <strong className="font-bold text-emerald-deep dark:text-gold">{children}</strong>,
-                          em: ({ children }) => <em className="italic">{children}</em>,
-                          ul: ({ children }) => <ul className="list-disc mr-6 mb-2 space-y-1 marker:text-emerald dark:marker:text-gold">{children}</ul>,
-                          ol: ({ children }) => <ol className="list-decimal mr-6 mb-2 space-y-1 marker:text-emerald dark:marker:text-gold">{children}</ol>,
-                          li: ({ children }) => <li className="text-sm pr-1">{children}</li>,
-                          blockquote: ({ children }) => <blockquote className="border-r-4 border-emerald dark:border-gold pr-3 italic text-slate-600 dark:text-slate-300 my-2 mr-1">{children}</blockquote>,
-                          code: ({ children }) => <code className="bg-slate-200 dark:bg-emerald-deep/60 rounded px-1.5 py-0.5 text-xs">{children}</code>,
-                          pre: ({ children }) => <pre className="bg-slate-200 dark:bg-emerald-deep/60 rounded p-2 text-xs overflow-x-auto my-2">{children}</pre>,
-                          a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer" className="underline text-emerald dark:text-gold-light hover:opacity-80">{children}</a>,
-                          hr: () => <hr className="my-3 border-slate-300 dark:border-emerald-soft/50" />,
-                        }}
-                      >
-                        {msg.content || ''}
-                      </ReactMarkdown>
-                    </div>
-                  )}
-                </div>
+                  <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${active ? 'bg-emerald/15 dark:bg-gold/20' : 'bg-slate-100 dark:bg-emerald-soft/20'}`}>
+                    <MessageSquare size={16} className={active ? 'text-emerald dark:text-gold-light' : 'text-slate-500 dark:text-slate-400'} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className={`truncate text-[13px] font-bold ${active ? '' : ''}`}>{s.title}</p>
+                    <p className={`mt-0.5 truncate text-[11px] ${active ? 'text-emerald-deep/70 dark:text-gold/80' : 'text-slate-500 dark:text-slate-400'}`}>
+                      {preview}
+                    </p>
+                  </div>
+                  <ChevronRight size={14} className={`mt-1 shrink-0 ${active ? 'text-emerald dark:text-gold-light' : 'text-slate-400 dark:text-slate-500 opacity-0 group-hover:opacity-100'}`} />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
+                  className="absolute top-1.5 left-1.5 z-10 rounded-md p-1 text-slate-400 opacity-0 transition hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/40 group-hover:opacity-100"
+                  aria-label="حذف الدردشة"
+                >
+                  <Trash2 size={14} />
+                </button>
               </div>
-            ))}
+            );
+          })}
+        </div>
 
-            {loading && (
-              <div className="flex justify-end">
-                <div className="rounded-2xl bg-slate-100 dark:bg-emerald-soft/30 px-4 py-3">
-                  <span className="text-sm text-slate-600 dark:text-slate-300">
-                    جاري التفكير
-                    <span className="inline-flex w-6 text-left">
-                      <span className="animate-pulse">.</span>
-                      <span className="animate-pulse" style={{ animationDelay: '150ms' }}>.</span>
-                      <span className="animate-pulse" style={{ animationDelay: '300ms' }}>.</span>
-                    </span>
-                  </span>
-                </div>
-              </div>
-            )}
+        <div className="border-t border-slate-200/70 dark:border-emerald-soft/30 px-4 py-3 text-center">
+          <div className="flex items-center justify-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+            <Sparkles size={14} className="text-emerald dark:text-gold-light" />
+            <span>مساعد توبة · رفيقك على الدرب</span>
           </div>
+        </div>
+      </aside>
 
-          {/* Input */}
-          <div className="border-t border-slate-200 dark:border-emerald-soft/30 p-3">
-            <div className="flex items-center gap-2">
-              <input
+      {/* Main Chat Area */}
+      <main className="flex flex-1 flex-col bg-slate-50/60 dark:bg-emerald-deep/30">
+        {/* Header (mobile: new chat button + title) */}
+        <header className="flex items-center justify-between gap-2 border-b border-slate-200/70 dark:border-emerald-soft/30 bg-white/80 dark:bg-emerald-deep/70 backdrop-blur px-4 py-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald to-emerald-deep text-white shadow-md shadow-emerald/20 dark:from-gold dark:to-gold-dark dark:text-emerald-deep dark:shadow-gold/20">
+              <Sparkles size={18} />
+            </div>
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-extrabold text-slate-800 dark:text-slate-100">
+                {activeSession?.title ?? 'مساعد توبة'}
+              </h2>
+              <p className="truncate text-[10px] text-slate-500 dark:text-slate-400">
+                {messages.length > 0 ? `${messages.length} رسالة` : 'ابدأ دردشة جديدة'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={createNewSession}
+              className="md:hidden flex items-center gap-1 rounded-xl bg-emerald/10 dark:bg-gold/15 px-3 py-1.5 text-[11px] font-bold text-emerald dark:text-gold-light transition active:scale-95"
+            >
+              <Plus size={14} />
+              جديد
+            </button>
+            <button
+              onClick={() => {
+                if (!activeId) return;
+                if (confirm('هل تريد حذف هذه الدردشة؟')) deleteSession(activeId);
+              }}
+              disabled={!activeId}
+              className="flex items-center justify-center rounded-xl p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-500 disabled:opacity-30 dark:hover:bg-red-900/40"
+              aria-label="حذف الدردشة الحالية"
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
+        </header>
+
+        {/* Messages */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6 space-y-4">
+          {messages.length === 0 && (
+            <div className="mx-auto flex h-full max-w-xl flex-col items-center justify-center gap-6 text-center py-6">
+              <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-emerald/10 to-gold/10 dark:from-gold/15 dark:to-emerald/10 shadow-inner">
+                <MessageCircle size={36} className="text-emerald dark:text-gold-light" />
+              </div>
+              <div>
+                <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100">مرحباً بك يا صديقي 👋</h3>
+                <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-300">
+                  أنا <span className="font-bold text-emerald dark:text-gold-light">توبة</span>، رفيقك الإسلامي المخلص.
+                  اسألني عن أي شيء.. القرآن، السيرة، الأذكار، همومك، نصائح، أو حتى كلمني عشان تريح بالك 💚
+                </p>
+              </div>
+              <div className="grid w-full grid-cols-1 sm:grid-cols-2 gap-2">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => send(s)}
+                    className="group flex items-center justify-between gap-2 rounded-2xl border border-slate-200 dark:border-emerald-soft/30 bg-white dark:bg-emerald-deep/50 px-4 py-3 text-right text-[13px] font-semibold text-slate-700 dark:text-slate-200 transition hover:border-emerald/50 hover:bg-emerald/5 dark:hover:border-gold/40 dark:hover:bg-gold/10"
+                  >
+                    <span>{s}</span>
+                    <ChevronRight size={16} className="text-slate-300 group-hover:text-emerald dark:group-hover:text-gold-light" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map((msg, i) => (
+            <div
+              key={i}
+              className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
+            >
+              <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl shadow-sm ${
+                msg.role === 'user'
+                  ? 'bg-gradient-to-br from-emerald to-emerald-deep text-white'
+                  : 'bg-gradient-to-br from-gold/20 to-emerald/20 text-emerald dark:text-gold-light ring-1 ring-emerald/20 dark:ring-gold/20'
+              }`}>
+                {msg.role === 'user' ? <User size={15} /> : <Bot size={15} />}
+              </div>
+              <div className={`max-w-[85%] md:max-w-[78%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed shadow-sm ${
+                msg.role === 'user'
+                  ? 'bg-gradient-to-br from-emerald to-emerald-deep text-white rounded-tr-sm'
+                  : 'bg-white dark:bg-emerald-deep/60 text-slate-800 dark:text-slate-100 rounded-tl-sm border border-slate-200/60 dark:border-emerald-soft/20'
+              }`}>
+                {msg.role === 'user' ? (
+                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                ) : (
+                  <div dir="rtl" className="markdown-body">
+                    <ReactMarkdown
+                      components={{
+                        p: ({ children }) => <p className="mb-2 last:mb-0 whitespace-pre-wrap">{children}</p>,
+                        h1: ({ children }) => <h1 className="text-lg font-bold mb-2 mt-3 text-emerald dark:text-gold-light">{children}</h1>,
+                        h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-3 text-emerald dark:text-gold-light">{children}</h2>,
+                        h3: ({ children }) => <h3 className="text-sm font-bold mb-1.5 mt-2.5 text-emerald-deep dark:text-gold">{children}</h3>,
+                        h4: ({ children }) => <h4 className="text-sm font-bold mb-1 mt-2 text-emerald-deep dark:text-gold">{children}</h4>,
+                        strong: ({ children }) => <strong className="font-bold text-emerald-deep dark:text-gold">{children}</strong>,
+                        em: ({ children }) => <em className="italic">{children}</em>,
+                        ul: ({ children }) => <ul className="list-disc mr-6 mb-2 space-y-1 marker:text-emerald dark:marker:text-gold">{children}</ul>,
+                        ol: ({ children }) => <ol className="list-decimal mr-6 mb-2 space-y-1 marker:text-emerald dark:marker:text-gold">{children}</ol>,
+                        li: ({ children }) => <li className="text-sm pr-1">{children}</li>,
+                        blockquote: ({ children }) => <blockquote className="border-r-4 border-emerald dark:border-gold pr-3 italic text-slate-600 dark:text-slate-300 my-2 mr-1">{children}</blockquote>,
+                        code: ({ children }) => <code className="bg-slate-100 dark:bg-emerald-deep/70 rounded px-1.5 py-0.5 text-xs">{children}</code>,
+                        pre: ({ children }) => <pre className="bg-slate-100 dark:bg-emerald-deep/70 rounded-lg p-2 text-xs overflow-x-auto my-2">{children}</pre>,
+                        a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer" className="underline text-emerald dark:text-gold-light hover:opacity-80">{children}</a>,
+                        hr: () => <hr className="my-3 border-slate-300/60 dark:border-emerald-soft/40" />,
+                      }}
+                    >
+                      {msg.content || ''}
+                    </ReactMarkdown>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {loading && (
+            <div className="flex gap-2.5">
+              <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-gold/20 to-emerald/20 text-emerald dark:text-gold-light ring-1 ring-emerald/20 dark:ring-gold/20 shadow-sm">
+                <Bot size={15} />
+              </div>
+              <div className="rounded-2xl rounded-tl-sm bg-white dark:bg-emerald-deep/60 border border-slate-200/60 dark:border-emerald-soft/20 px-4 py-3 shadow-sm">
+                <span className="text-sm text-slate-600 dark:text-slate-300">
+                  جاري التفكير
+                  <span className="inline-flex w-6 text-right justify-start mr-0.5">
+                    <span className="animate-pulse">.</span>
+                    <span className="animate-pulse" style={{ animationDelay: '150ms' }}>.</span>
+                    <span className="animate-pulse" style={{ animationDelay: '300ms' }}>.</span>
+                  </span>
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Input */}
+        <div className="border-t border-slate-200/70 dark:border-emerald-soft/30 bg-white/80 dark:bg-emerald-deep/70 backdrop-blur p-3 md:p-4">
+          <form
+            onSubmit={(e) => { e.preventDefault(); send(input); }}
+            className="mx-auto flex max-w-3xl items-end gap-2"
+          >
+            <div className="flex-1">
+              <textarea
+                ref={inputRef as any}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -356,22 +554,27 @@ safetySettings: [
                     send(input);
                   }
                 }}
-                placeholder="اكتب سؤالك..."
-                className="flex-1 rounded-xl border border-slate-200 dark:border-emerald-soft/40 bg-slate-50 dark:bg-emerald-deep/40 px-3.5 py-2.5 text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:border-emerald focus:outline-none dark:focus:border-gold"
+                rows={1}
+                placeholder="اكتب رسالتك هنا... (Enter للإرسال، Shift+Enter للسطر الجديد)"
+                className="w-full resize-none rounded-2xl border border-slate-200 dark:border-emerald-soft/40 bg-slate-50 dark:bg-emerald-deep/40 px-4 py-3 text-[13.5px] leading-relaxed text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:border-emerald focus:outline-none focus:ring-4 focus:ring-emerald/15 dark:focus:border-gold dark:focus:ring-gold/20 disabled:opacity-50"
                 disabled={loading}
+                style={{ minHeight: '48px', maxHeight: '160px' }}
               />
-              <button
-                onClick={() => send(input)}
-                disabled={loading || !input.trim()}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald text-white transition hover:bg-emerald-deep disabled:opacity-40 dark:bg-gold dark:hover:bg-gold-dark dark:text-emerald-deep"
-                aria-label="إرسال"
-              >
-                <Send size={18} />
-              </button>
             </div>
-          </div>
+            <button
+              type="submit"
+              disabled={loading || !input.trim()}
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald to-emerald-deep text-white shadow-lg shadow-emerald/30 transition hover:shadow-xl disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 dark:from-gold dark:to-gold-dark dark:text-emerald-deep dark:shadow-gold/25"
+              aria-label="إرسال"
+            >
+              <Send size={19} className="rotate-180" />
+            </button>
+          </form>
+          <p className="mx-auto mt-2 max-w-3xl text-center text-[10px] text-slate-400 dark:text-slate-500">
+            قد تحتاج الإجابات للمراجعة. اعتمد على العلماء الثقات في المسائل الفقهية الكبرى.
+          </p>
         </div>
-      )}
-    </>
+      </main>
+    </div>
   );
 }
