@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { MessageCircle, X, Send, Sparkles } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -18,18 +19,23 @@ const GEMINI_MODEL = 'gemini-3.6-flash';
 const GEMINI_API_URL =
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`;
 
-const SYSTEM_PROMPT = `أنت "توبة"، عالم وموجّه إسلامي فريد ومحقق متخصص في جميع العلوم الشرعية (العقيدة، التفسير، الحديث الشريف، الفقه الميسر، والسيرة النبوية). مهمتك هي تقديم إجابات شاملة، عميقة، دقيقة، وموثوقة تماماً، مستندة حصرياً إلى القرآن الكريم والسنة النبوية الصحيحة، وفقاً لمنهج أهل السنة والجماعة.
+const SYSTEM_PROMPT = `أنت "توبة"، عالم وموجّه إسلامي مختصر ومباشر متخصص في جميع العلوم الشرعية (العقيدة، التفسير، الحديث الشريف، الفقه الميسر، والسيرة النبوية). مهمتك هي تقديم إجابات دقيقة وموثوقة تماماً، مستندة حصرياً إلى القرآن الكريم والسنة النبوية الصحيحة، وفقاً لمنهج أهل السنة والجماعة.
 
-قواعد الإجابة الإلزامية:
-1. الشمول وعدم البتر: أعطِ إجابات وافية، كاملة، ومفصلة تغطي كل جوانب السؤال دون بتر أو اختصار مخل، واستخدم الفقرات والنقاط لتنظيم الإجابة.
-2. التوثيق العلمي الدقيق: 
-   - عند الاستشهاد بالآيات، اذكر الآية كاملة مع اسم السورة ورقمها (مثال: البقرة: 255).
-   - عند ذكر الأحاديث، انسبها لصحيح البخاري، مسلم، أو السنن، وبين درجتها إن لزم.
-3. المنهج الوسطي واليسر: قدم الأحكام بأسلوب يسر لا عسر فيه، واعرض آراء المذاهب الأربعة المعتبرة باختصار عند وجود خلاف فقهي بروح التسامح دون تعصب.
-4. الأسلوب والروح: استخدم لغة عربية فصحى مبسطة، بليغة، دافئة، ومليئة بالحكمة، والموعظة الحسنة، والترغيب في الخير والتوبة.
-5. الضابط والأمانة: إذا سُئلت عن نازلة فقهية كبرى أو فتوى خاصة تتطلب تحقيق مناط شخصي، وجّه السائل بحكمة لمراجعة دور الإفتاء الرسمية أو العلماء الثقات.
+قواعد الإجابة الإلزامية (مهمة جداً):
+1. **الإجابة المختصرة (الافتراضي):** رد مباشر ومختصر جواب السؤال فقط بلا مقدمات طويلة أو بسم الله مكرر أو صلوات طويلة في كل رسالة. لا تفتح إلا بتحية قصيرة إذا لزم، واذهب مباشرة للجواب. اكفِ بذكر الدليل أو الآية باختصار (مثال: [البقرة:255]) بدون إطالة.
+2. **الإجابة المفصلة (فقط عند الطلب صراحة):** إذا قال المستخدم كلمات مثل: "اشرحلي"، "تفصيل"، "مفصل"، "واضح"، "إجابة وافية"، "علي البسط" – فقط عندها أعطِ إجابة وافية ومفصلة بفقرات ونقاط.
+3. **التوثيق الدقيق (باختصار):** عند الاستشهاد اذكر المصدر باختصار فقط:
+   - آية: اذكر اسم السورة ورقمها بين أقواس مثل (البقرة: 255) وآخرها آية كاملة إذا كانت قصيرة.
+   - حديث: اذكر المصدر المختصر مثل (صحيح مسلم) أو (أخرجه البخاري).
+4. **المنهج الوسطي واليسر:** قدم الأحكام بأسلوب يسر. عند وجود خلاف فقهي معتدل بذكر الاختلاف باختصار جداً إلا إذا طلب التفصيل.
+5. **الأسلوب:** لغة عربية فصحى مبسطة، دافئة، ودون مواعظ أو وعظات لا علاقة لها بالسؤال إلا إذا طلبها المستخدم.
+6. **الضابط:** إذا السؤال فتوى خاصة أو نازلة كبرى تحتاج تخصص، وجّه السائل بحكمة لمراجعة علم ثقة أو دار إفتاء، باختصار.
 
-اجعل إجابتك دائماً متكاملة، مرتبة، واضحة، ولا تتوقف في منتصف الشرح أبداً.`;
+مثال لرد صحيح مختصر:
+س: متى ولد رسول الله صلى الله عليه وسلم؟
+ج: ولد النبي صلى الله عليه وسلم يوم الإثنين في شهر ربيع الأول عام الفيل (حوالي سنة 571م). المتداول بين المؤرخين 12 ربيع الأول، والراجح عند بعض المحققين 9 ربيع الأول، وكلاهما صحيح السنة. دليل أنّه ولد يوم الإثنين: حديث صحيح مسلم (1162).
+
+ثَمَّ إن قال المستخدم "اشرحلي أكتر" أو "تفصيل" – اكتب الشرح المفصل.`;
 
 interface GeminiPart {
   text: string;
@@ -98,7 +104,7 @@ export default function AIAssistant() {
           topP: 0.95,
           topK: 40,
           maxOutputTokens: 4096,
-          responseMimeType: 'text/plain',
+          responseMimeType: 'text/markdown',
         },
 safetySettings: [
           { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
@@ -288,20 +294,51 @@ safetySettings: [
                   className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
                     msg.role === 'user'
                       ? 'bg-emerald text-white rounded-bl-sm'
-                      : 'bg-slate-100 dark:bg-emerald-soft/30 text-slate-800 dark:text-slate-100 rounded-br-sm'
+                      : 'bg-slate-100 dark:bg-emerald-soft/30 text-slate-800 dark:text-slate-100 rounded-br-sm markdown-content'
                   }`}
                 >
-                  {msg.content}
+                  {msg.role === 'user' ? (
+                    msg.content
+                  ) : (
+                    <div dir="rtl" className="markdown-body">
+                      <ReactMarkdown
+                        components={{
+                          p: ({ children }) => <p className="mb-2 last:mb-0 whitespace-pre-wrap">{children}</p>,
+                          h1: ({ children }) => <h1 className="text-lg font-bold mb-2 mt-3 text-emerald dark:text-gold-light">{children}</h1>,
+                          h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-3 text-emerald dark:text-gold-light">{children}</h2>,
+                          h3: ({ children }) => <h3 className="text-sm font-bold mb-1.5 mt-2.5 text-emerald-deep dark:text-gold">{children}</h3>,
+                          h4: ({ children }) => <h4 className="text-sm font-bold mb-1 mt-2 text-emerald-deep dark:text-gold">{children}</h4>,
+                          strong: ({ children }) => <strong className="font-bold text-emerald-deep dark:text-gold">{children}</strong>,
+                          em: ({ children }) => <em className="italic">{children}</em>,
+                          ul: ({ children }) => <ul className="list-disc mr-6 mb-2 space-y-1 marker:text-emerald dark:marker:text-gold">{children}</ul>,
+                          ol: ({ children }) => <ol className="list-decimal mr-6 mb-2 space-y-1 marker:text-emerald dark:marker:text-gold">{children}</ol>,
+                          li: ({ children }) => <li className="text-sm pr-1">{children}</li>,
+                          blockquote: ({ children }) => <blockquote className="border-r-4 border-emerald dark:border-gold pr-3 italic text-slate-600 dark:text-slate-300 my-2 mr-1">{children}</blockquote>,
+                          code: ({ children }) => <code className="bg-slate-200 dark:bg-emerald-deep/60 rounded px-1.5 py-0.5 text-xs">{children}</code>,
+                          pre: ({ children }) => <pre className="bg-slate-200 dark:bg-emerald-deep/60 rounded p-2 text-xs overflow-x-auto my-2">{children}</pre>,
+                          a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer" className="underline text-emerald dark:text-gold-light hover:opacity-80">{children}</a>,
+                          hr: () => <hr className="my-3 border-slate-300 dark:border-emerald-soft/50" />,
+                        }}
+                      >
+                        {msg.content || ''}
+                      </ReactMarkdown>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
 
             {loading && (
               <div className="flex justify-end">
-                <div className="flex items-center gap-1 rounded-2xl bg-slate-100 dark:bg-emerald-soft/30 px-4 py-3">
-                  <span className="h-2 w-2 animate-bounce rounded-full bg-slate-400 dark:bg-slate-300" style={{ animationDelay: '0ms' }} />
-                  <span className="h-2 w-2 animate-bounce rounded-full bg-slate-400 dark:bg-slate-300" style={{ animationDelay: '150ms' }} />
-                  <span className="h-2 w-2 animate-bounce rounded-full bg-slate-400 dark:bg-slate-300" style={{ animationDelay: '300ms' }} />
+                <div className="rounded-2xl bg-slate-100 dark:bg-emerald-soft/30 px-4 py-3">
+                  <span className="text-sm text-slate-600 dark:text-slate-300">
+                    جاري التفكير
+                    <span className="inline-flex w-6 text-left">
+                      <span className="animate-pulse">.</span>
+                      <span className="animate-pulse" style={{ animationDelay: '150ms' }}>.</span>
+                      <span className="animate-pulse" style={{ animationDelay: '300ms' }}>.</span>
+                    </span>
+                  </span>
                 </div>
               </div>
             )}
