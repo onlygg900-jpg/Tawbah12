@@ -209,7 +209,7 @@ export default function AIAssistant() {
           topP: 0.95,
           topK: 40,
           maxOutputTokens: 4096,
-          responseMimeType: 'text/markdown',
+          responseMimeType: 'text/plain',
         },
         safetySettings: [
           { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },

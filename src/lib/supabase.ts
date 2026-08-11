@@ -739,6 +739,21 @@ export async function upsertDailyProgress(progress: {
   return safeQuery(async () => {
     if (!progress.userId || !progress.date || !isUuid(progress.userId)) return false;
 
+    try {
+      await supabase!
+        .from('profiles')
+        .upsert(
+          {
+            id: progress.userId,
+            display_name: 'مستخدم توبة',
+            email: '',
+          },
+          { onConflict: 'id', ignoreDuplicates: true, defaultToNull: false }
+        );
+    } catch (profileErr) {
+      console.warn('ensureProfileExists skipped:', profileErr instanceof Error ? profileErr.message : String(profileErr));
+    }
+
     const row: Omit<DBDailyProgress, 'id'> = {
       user_id: progress.userId,
       date: progress.date,
