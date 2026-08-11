@@ -170,6 +170,34 @@ function parseRetryDelayFromError(body: string): number | null {
   return null;
 }
 
+function isQuotaExhausted(body: string): boolean {
+  if (!body) return false;
+  try {
+    const lower = body.toLowerCase();
+    const quotaExceeded = lower.includes('quota exceeded') || lower.includes('exceeded your current quota');
+    const freeTier = lower.includes('free_tier') || lower.includes('free-tier') || lower.includes('free tier');
+    const rpmOrTpm = lower.includes('rpm') || lower.includes('tpm') || lower.includes('requests per minute') || lower.includes('tokens per minute');
+    return quotaExceeded && !rpmOrTpm;
+  } catch {
+    return false;
+  }
+}
+
+interface QuotaState {
+  isBlocked: boolean;
+  blockedUntil: number;
+  lastRequestAt: number;
+}
+
+const QUOTA_BLOCK_MS = 60 * 60 * 1000;
+const MIN_INTERVAL_BETWEEN_REQUESTS_MS = 2500;
+
+const quotaState: QuotaState = {
+  isBlocked: false,
+  blockedUntil: 0,
+  lastRequestAt: 0,
+};
+
 function normalizeUserText(text: string): string {
   let t = text.replace(/\s+/g, ' ').trim();
   const arMap: Record<string, string> = {
@@ -273,7 +301,7 @@ export default function AIAssistant() {
     );
   }, []);
 
-  const MAX_RETRIES_PER_MODEL = 8;
+  const MAX_RETRIES_PER_MODEL = 3;
   const MAX_MODELS_TRIED = GEMINI_MODELS_FALLBACK.length;
 
   const performStreamingRequest = useCallback(async (
@@ -339,16 +367,22 @@ export default function AIAssistant() {
         try { errBody = await res.text(); } catch { /* ignore */ }
         console.warn(`Gemini [${modelName}] attempt ${attempt} HTTP ${statusCode}:`, errBody.slice(0, 400));
 
-        // — 429 — Quota exceeded → schedule retry for THIS model with extracted delay
+        // — 429 — Rate limit or Quota Exhausted
         if (statusCode === 429) {
+          const quotaGone = isQuotaExhausted(errBody);
+          if (quotaGone) {
+            quotaState.isBlocked = true;
+            quotaState.blockedUntil = Date.now() + QUOTA_BLOCK_MS;
+            return { ok: false, text: '', permanentError: 'QUOTA_EXHAUSTED' };
+          }
           const parsedDelay = parseRetryDelayFromError(errBody);
           const baseDelay = parsedDelay ?? 3000 + attempt * 1500;
-          const capped = Math.min(baseDelay, 25000);
+          const capped = Math.min(baseDelay, 12000);
           onRetry({
             attempt,
             maxAttempts: MAX_RETRIES_PER_MODEL * MAX_MODELS_TRIED,
             delaySeconds: Math.ceil(capped / 1000),
-            message: 'تم تجاوز الحصة المؤقتة',
+            message: 'تحديد مؤقت للسرعة',
             modelName,
           });
           for (let waited = 0; waited < capped; waited += 250) {
@@ -485,6 +519,37 @@ export default function AIAssistant() {
     const trimmed = text.trim();
     if (!trimmed || loading) return;
 
+    if (quotaState.isBlocked && Date.now() < quotaState.blockedUntil) {
+      const remainingMin = Math.ceil((quotaState.blockedUntil - Date.now()) / 60000);
+      const errMsg = `✨ الحصة المجانية لليوم انتهت (20 طلب على المستوى المجاني من Gemini).\n\n**الرجاء المحاولة بعد ~${remainingMin} دقيقة**، أو:\n1. إضافة مفتاح Gemini مدفوع (Billing) في إعدادات مشروع Google AI Studio\n2. استخدام مفتاح API من حساب آخر\n\nفي هذه الأثناء استكشف باقي ميزات تطبيق توبة — القرآن الكريم، الأذكار، مواقيت الصلاة، التسبيح 💚`;
+      let tempSessionId = activeId;
+      if (!tempSessionId || !activeSession) {
+        tempSessionId = createNewSession();
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      const sid = tempSessionId;
+      upsertSessionMessages(sid, (s) => {
+        const firstMessage = s.messages.length === 0;
+        const copy = [...s.messages];
+        copy.push({ role: 'assistant', content: errMsg });
+        return {
+          ...s,
+          title: firstMessage ? genTitleFromFirstMessage(trimmed) : s.title,
+          messages: copy,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      setInput('');
+      return;
+    }
+
+    const now = Date.now();
+    const timeSinceLast = now - quotaState.lastRequestAt;
+    if (timeSinceLast < MIN_INTERVAL_BETWEEN_REQUESTS_MS) {
+      await sleep(MIN_INTERVAL_BETWEEN_REQUESTS_MS - timeSinceLast);
+    }
+    quotaState.lastRequestAt = Date.now();
+
     // Cancel any in-flight retry loop
     retryCancelRef.current.cancelled = true;
     retryCancelRef.current = { cancelled: false };
@@ -547,8 +612,12 @@ export default function AIAssistant() {
 
           if (result.permanentError) {
             permanentError = result.permanentError;
+            if (result.permanentError === 'QUOTA_EXHAUSTED') {
+              break modelLoop;
+            }
             if (result.permanentError === 'PERM_AUTH') {
-              // Skip to next model; auth failures are per-key not per-model, but try anyway
+              // Auth failures are per-key not per-model; no point trying other models
+              break modelLoop;
             }
             continue;
           }
@@ -569,41 +638,58 @@ export default function AIAssistant() {
       setRetryStatus(null);
 
       if (!successResult || !successResult.ok || !successResult.text.trim()) {
+        if (permanentError === 'QUOTA_EXHAUSTED') {
+          throw new Error(
+            '✨ الحصة المجانية لليوم انتهت (20 طلب على المستوى المجاني من Gemini). الحلول الممكنة:\n' +
+            '1. انتظر حتى تجدد الحصة تلقائياً (عادة بعد ساعة أو حتى اليوم التالي).\n' +
+            '2. أضف مفتاح Gemini مدفوع (Billing) إلى إعدادات مشروعك في Google AI Studio.\n' +
+            '3. استخدم مفتاح API من حساب آخر.\n\n' +
+            'في هذه الأثناء استكشف باقي ميزات تطبيق توبة — القرآن الكريم، الأذكار، مواقيت الصلاة، التسبيح 💚'
+          );
+        }
         if (permanentError === 'PERM_AUTH') {
-          throw new Error('مفتاح Gemini غير صالح. يرجى التحقق من صحة المفتاح في إعدادات المشروع.');
+          throw new Error('مفتاح Gemini غير صالح. يرجى التحقق من صحة المفتاح في إعدادات المشروع أو إنشاء مفتاح جديد في Google AI Studio.');
         }
         if (permanentError === 'BAD_REQUEST') {
           throw new Error('صياغة الطلب غير مقبولة، جرّب إعادة صياغة السؤال بطريقة أخرى.');
         }
         if (cancelToken.cancelled) {
-          // Silently return (user sent new message)
           return;
         }
-        // Ultimate failure after all models + retries → try non-streaming one last shot
         let fallbackMsg: string | null = null;
-        try {
-          const contents = buildGeminiContents(currentMessages);
-          const body = {
-            contents,
-            systemInstruction: { role: 'system' as const, parts: [{ text: SYSTEM_PROMPT }] },
-            generationConfig: { temperature: 0.65, maxOutputTokens: 2048, responseMimeType: 'text/plain' },
-          };
-          for (let fm = 0; fm < GEMINI_MODELS_FALLBACK.length && !fallbackMsg; fm++) {
-            const fbRes = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODELS_FALLBACK[fm]}:generateContent?key=${GEMINI_API_KEY}`,
-              {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
+        if (permanentError !== 'QUOTA_EXHAUSTED') {
+          try {
+            const contents = buildGeminiContents(currentMessages);
+            const body = {
+              contents,
+              systemInstruction: { role: 'system' as const, parts: [{ text: SYSTEM_PROMPT }] },
+              generationConfig: { temperature: 0.65, maxOutputTokens: 2048, responseMimeType: 'text/plain' },
+            };
+            for (let fm = 0; fm < GEMINI_MODELS_FALLBACK.length && !fallbackMsg; fm++) {
+              const fbRes = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODELS_FALLBACK[fm]}:generateContent?key=${GEMINI_API_KEY}`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(body),
+                }
+              );
+              if (fbRes.status === 429) {
+                const fbBody = await fbRes.text().catch(() => '');
+                if (isQuotaExhausted(fbBody)) {
+                  quotaState.isBlocked = true;
+                  quotaState.blockedUntil = Date.now() + QUOTA_BLOCK_MS;
+                  break;
+                }
               }
-            );
-            if (fbRes.ok) {
-              const fbJson = await fbRes.json();
-              const t = fbJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (t && t.trim()) fallbackMsg = t;
+              if (fbRes.ok) {
+                const fbJson = await fbRes.json();
+                const t = fbJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (t && t.trim()) fallbackMsg = t;
+              }
             }
-          }
-        } catch { /* ignore fallback failure */ }
+          } catch { /* ignore fallback failure */ }
+        }
 
         if (fallbackMsg) {
           upsertSessionMessages(currentSessionId, (s) => {
@@ -616,6 +702,16 @@ export default function AIAssistant() {
             return { ...s, messages: copy };
           });
           return;
+        }
+
+        if (quotaState.isBlocked && Date.now() < quotaState.blockedUntil) {
+          throw new Error(
+            '✨ الحصة المجانية لليوم انتهت (20 طلب على المستوى المجاني من Gemini). الحلول الممكنة:\n' +
+            '1. انتظر حتى تجدد الحصة تلقائياً (عادة بعد ساعة أو حتى اليوم التالي).\n' +
+            '2. أضف مفتاح Gemini مدفوع (Billing) إلى إعدادات مشروعك في Google AI Studio.\n' +
+            '3. استخدم مفتاح API من حساب آخر.\n\n' +
+            'في هذه الأثناء استكشف باقي ميزات تطبيق توبة — القرآن الكريم، الأذكار، مواقيت الصلاة، التسبيح 💚'
+          );
         }
 
         throw new Error('لم ينجح الاتصال بعد محاولات متعددة. يرجى التأكد من الانترنت أو المحاولة بعد دقائق.');
