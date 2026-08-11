@@ -139,4 +139,17 @@ export interface HadithDhikr {
   type: 'hadith' | 'dhikr';
 }
 
-export type ViewKey = 'home' | 'quran' | 'challenges' | 'settings';
+export type ViewKey = 'home' | 'quran' | 'assistant' | 'challenges' | 'settings';
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
