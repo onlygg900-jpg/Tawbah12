@@ -16,7 +16,7 @@ const SUGGESTIONS = [
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
 const GEMINI_MODEL = 'gemini-3.6-flash';
 const GEMINI_API_URL =
-  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`;
 
 const SYSTEM_PROMPT = `أنت "توبة"، عالم وموجّه إسلامي فريد ومحقق متخصص في جميع العلوم الشرعية (العقيدة، التفسير، الحديث الشريف، الفقه الميسر، والسيرة النبوية). مهمتك هي تقديم إجابات شاملة، عميقة، دقيقة، وموثوقة تماماً، مستندة حصرياً إلى القرآن الكريم والسنة النبوية الصحيحة، وفقاً لمنهج أهل السنة والجماعة.
 
@@ -112,11 +112,11 @@ safetySettings: [
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 25_000);
 
-      const res = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+      const res = await fetch(`${GEMINI_API_URL}&key=${GEMINI_API_KEY}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
-          Accept: 'application/json',
+          Accept: 'text/event-stream',
         },
         body: JSON.stringify(geminiBody),
         signal: controller.signal,
@@ -124,7 +124,7 @@ safetySettings: [
 
       clearTimeout(timeoutId);
 
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
         let errText = '';
         try { errText = await res.text(); } catch { /* ignore */ }
         console.error(`Gemini HTTP ${res.status}:`, errText.slice(0, 500));
@@ -141,25 +141,59 @@ safetySettings: [
         throw new Error(`خطأ في الاتصال بالمساعد (${res.status}).`);
       }
 
-      const data = await res.json();
-      const rawText: string | undefined =
-        data?.candidates?.[0]?.content?.parts?.[0]?.text ??
-        data?.candidates?.[0]?.output;
+      setMessages((m) => [...m, { role: 'assistant', content: '' }]);
 
-      const finishReason: string | undefined = data?.candidates?.[0]?.finishReason;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let accumulatedText = '';
+      let finishReason: string | undefined;
 
-      if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.replace('data: ', '').trim();
+            if (!jsonStr) continue;
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const textChunk = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (textChunk) {
+                accumulatedText += textChunk;
+                setMessages((m) => {
+                  const copy = [...m];
+                  copy[copy.length - 1] = { role: 'assistant', content: accumulatedText };
+                  return copy;
+                });
+              }
+              if (parsed?.candidates?.[0]?.finishReason) {
+                finishReason = parsed.candidates[0].finishReason;
+              }
+            } catch {
+              // تجاهل أخطاء تحليل أجزاء الـ JSON غير الكاملة أثناء التدفق
+            }
+          }
+        }
+      }
+
+      if (!accumulatedText || !accumulatedText.trim()) {
         if (finishReason && finishReason !== 'STOP') {
-          setMessages((m) => [
-            ...m,
-            { role: 'assistant', content: 'عذراً، لم أتمكن من توليد رد مناسب لهذا السؤال. جرّب صياغة أخرى.' },
-          ]);
+          setMessages((m) => {
+            const copy = [...m];
+            copy[copy.length - 1] = {
+              role: 'assistant',
+              content: 'عذراً، لم أتمكن من توليد رد مناسب لهذا السؤال. جرّب صياغة أخرى.',
+            };
+            return copy;
+          });
           return;
         }
         throw new Error('لم يتم استلام رد نصي من المساعد الذكي.');
       }
-
-      setMessages((m) => [...m, { role: 'assistant', content: rawText.trim() }]);
     } catch (e) {
       console.error('AI assistant exception:', e);
       let msg: string;
